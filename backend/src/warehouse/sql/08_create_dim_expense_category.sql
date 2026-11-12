@@ -1,0 +1,8 @@
+
+CREATE TABLE IF NOT EXISTS gold.dim_expense_category (
+    expense_category_key SMALLINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    expense_category_name VARCHAR(100) NOT NULL UNIQUE,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

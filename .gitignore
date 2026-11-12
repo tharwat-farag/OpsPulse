@@ -1,35 +1,59 @@
 
+# ==========================================
 # Python
+# ==========================================
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+*.pyo
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 
-# Environment variables
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
 .env
 .env.*
 !.env.example
 
-# Node.js
+# ==========================================
+# Node.js / Next.js
+# ==========================================
 node_modules/
 .next/
 out/
 dist/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
-# IDE
+# ==========================================
+# IDE & Editors
+# ==========================================
 .vscode/
 .idea/
 
-# OS
+# ==========================================
+# Operating System
+# ==========================================
 .DS_Store
 Thumbs.db
+Desktop.ini
 
+# ==========================================
 # Logs
+# ==========================================
 *.log
 
-# Data files
+# ==========================================
+# Data Files
+# Keep project data folders, but exclude generated datasets
+# ==========================================
 data/raw/*
 data/bronze/*
 data/silver/*
@@ -40,3 +64,10 @@ data/gold/*
 !data/bronze/.gitkeep
 !data/silver/.gitkeep
 !data/gold/.gitkeep
+
+# ==========================================
+# Temporary Files
+# ==========================================
+*.tmp
+*.bak
+*.swp

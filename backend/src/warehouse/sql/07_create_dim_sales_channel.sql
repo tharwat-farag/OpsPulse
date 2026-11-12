@@ -1,0 +1,8 @@
+
+CREATE TABLE IF NOT EXISTS gold.dim_sales_channel (
+    sales_channel_key SMALLINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    sales_channel_name VARCHAR(50) NOT NULL UNIQUE,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
