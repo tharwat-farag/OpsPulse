@@ -86,6 +86,19 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+@app.get("/", tags=["Root"])
+def root():
+    """Root metadata endpoint confirming service availability."""
+    return {
+        "service": "OpsPulse Analytics API",
+        "version": "1.0.0",
+        "status": "online",
+        "health": "/api/health",
+        "docs": "/docs",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @app.get("/api/health", tags=["Health"])
 def health_check():
     """

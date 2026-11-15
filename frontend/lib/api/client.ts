@@ -6,7 +6,7 @@
  */
 
 const RAW_API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
+  process.env.NEXT_PUBLIC_API_URL || "/api";
 
 export interface ApiResponse<T> {
   data: T;
@@ -86,7 +86,7 @@ async function fetchApi<T>(endpoint: string, params?: Record<string, any>): Prom
     // Classify genuine network / connection refused errors
     const target = url ? url.origin : baseUrl;
     throw new Error(
-      `Cannot reach backend API at ${target}. Ensure FastAPI is running on port 8000. (${err.message})`
+      `Cannot reach backend API at ${target}. Ensure the FastAPI analytical service is running and accessible. (${err.message})`
     );
   }
 }

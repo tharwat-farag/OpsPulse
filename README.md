@@ -353,13 +353,34 @@ npm run build        # Compiled successfully (12/12 static pages)
 
 ---
 
-## 16. Deployment Architecture
+## 16. Cloud Deployment Architecture (Vercel + Neon)
 
-The production-ready deployment architecture decouples compute from storage:
-- **Frontend Dashboard:** Deployed on **Vercel** via Next.js Edge / Serverless hosting with optimized static caching and reverse-proxy API routing.
-- **API Backend:** Containerized Python FastAPI application hosted on cloud infrastructure (e.g. Render, Railway, or Google Cloud Run) communicating over secure HTTPS.
-- **Database:** Managed Cloud PostgreSQL instance hosting the `gold` dimensional warehouse and `monitoring` schemas.
-- **Security:** All database credentials and API secrets remain strictly server-side. Zero sensitive keys or internal connection strings are exposed in client-side bundles.
+OpsPulse is architected for zero-maintenance, cost-effective cloud deployment using **Vercel** and **Neon PostgreSQL**:
+
+```text
+┌─────────────────────────────────┐
+│     Next.js 14 Frontend         │  (Vercel Project: opspulse-web)
+│   (App Router / Tailwind / UI)  │
+└────────────────┬────────────────┘
+                 │ /api/* rewrite proxy
+                 ▼
+┌─────────────────────────────────┐
+│      FastAPI Backend            │  (Vercel Project: opspulse-api)
+│   (Serverless Python Function)  │
+└────────────────┬────────────────┘
+                 │ SSL + NullPool
+                 ▼
+┌─────────────────────────────────┐
+│       Neon PostgreSQL           │  (Cloud Data Warehouse)
+│ (Gold Star Schema + Monitoring) │
+└─────────────────────────────────┘
+```
+
+- **Frontend (Vercel Project B):** Next.js 14 App Router, TypeScript, Tailwind CSS, Recharts. Proxies `/api/*` to the backend via Next.js rewrites (`BACKEND_API_URL`).
+- **Backend (Vercel Project A):** FastAPI analytical engine running on Vercel Serverless Functions (`backend/api/index.py`), utilizing SQLAlchemy with `NullPool` to prevent connection leaks on serverless invocations.
+- **Cloud Warehouse (Neon):** Managed PostgreSQL hosting the Gold star schema (`gold.*`) and data quality / pipeline monitoring telemetry (`monitoring.*`).
+- **Zero Third-Party VM Dependencies:** Render is completely eliminated. The entire live stack runs serverlessly on Vercel and Neon.
+- **Step-by-Step Deployment Guide:** See [docs/vercel_deployment.md](docs/vercel_deployment.md) for full project setup, environment variable configuration, and deployment verification.
 
 ---
 

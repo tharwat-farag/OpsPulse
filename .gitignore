@@ -22,10 +22,11 @@ env/
 !.env.example
 
 # ==========================================
-# Node.js / Next.js
+# Node.js / Next.js / Vercel
 # ==========================================
 node_modules/
 .next/
+.vercel/
 out/
 dist/
 npm-debug.log*

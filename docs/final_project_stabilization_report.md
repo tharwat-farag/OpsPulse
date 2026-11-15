@@ -385,7 +385,7 @@ Warning: dim_date not found in source schema, skipping.
 - **Credential Masking:** Added `getpass.getpass()` so database connection strings are never visible in terminal logs, process lists, or shell history.
 
 ### C. Cloud Connection Normalization
-- Neon, Supabase, and Render commonly generate PostgreSQL connection strings starting with `postgres://` or `postgresql://`.
+- Neon, Supabase, and other cloud PostgreSQL providers commonly generate PostgreSQL connection strings starting with `postgres://` or `postgresql://`.
 - Updated `backend/src/warehouse/db_connection.py` to automatically normalize incoming connection URLs to `postgresql+psycopg://` ensuring seamless compatibility with SQLAlchemy 2.0 and the Psycopg 3 binary driver without manual intervention.
 
 ### D. PostgreSQL GENERATED ALWAYS AS IDENTITY & Safe Resumable Replication

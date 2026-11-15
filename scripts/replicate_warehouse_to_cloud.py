@@ -3,7 +3,7 @@ OpsPulse Cloud Warehouse Migration & Safe Resumable Replication Utility.
 
 Copies schemas, tables, constraints, identity columns, sequences, and data
 from the local OpsPulse PostgreSQL warehouse (opspulse_dw) to a target
-Cloud PostgreSQL database (e.g., Neon, Supabase, Render, AWS RDS).
+Cloud PostgreSQL database (e.g., Neon, Supabase, AWS RDS, GCP Cloud SQL).
 
 Key Features:
 - Non-destructive, idempotent, and safely resumable across partial failures.

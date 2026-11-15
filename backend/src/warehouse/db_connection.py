@@ -53,10 +53,31 @@ def get_database_engine() -> Engine:
     elif database_url.startswith("postgresql://") and "+psycopg" not in database_url:
         database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
+    engine_kwargs = {
+        "pool_pre_ping": True,
+        "future": True,
+    }
+
+    # When running on Vercel or in serverless environments, use NullPool to avoid connection leaks
+    is_serverless = (
+        bool(os.getenv("VERCEL"))
+        or bool(os.getenv("SERVERLESS"))
+        or os.getenv("OPSPULSE_DB_POOL_TYPE", "").lower() == "null"
+    )
+
+    if is_serverless:
+        from sqlalchemy.pool import NullPool
+        engine_kwargs["poolclass"] = NullPool
+    else:
+        # Default pooling for long-running servers / local development
+        pool_size = int(os.getenv("OPSPULSE_DB_POOL_SIZE", "5"))
+        max_overflow = int(os.getenv("OPSPULSE_DB_MAX_OVERFLOW", "10"))
+        engine_kwargs["pool_size"] = pool_size
+        engine_kwargs["max_overflow"] = max_overflow
+
     engine = create_engine(
         database_url,
-        pool_pre_ping=True,
-        future=True,
+        **engine_kwargs,
     )
 
     return engine
