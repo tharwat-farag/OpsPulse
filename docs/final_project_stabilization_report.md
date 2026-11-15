@@ -365,3 +365,25 @@ All high-resolution visual evidence was captured via Chrome DevTools Protocol an
 ### G. Remaining Documented Limitations
 1. **Calendar Year Scope:** Transactional data is bounded within calendar year 2025 (`2025-01-01` to `2025-12-31`). Selecting date intervals outside this window returns empty sets.
 2. **Delivery Metric Definition:** The procurement delivery metric reflects On-Time Delivery Rate (32.9%) based on dock receipt timestamps. Full order-line item acceptance is tracked as a separate metric (Receipt Acceptance Rate: 95.7% per-receipt average, 97.7% aggregate units accepted).
+
+---
+
+## 10. Cloud Replication Diagnostics, Root Cause Resolution & Deployment Blueprints
+
+### A. Root Cause of Missing Table Detection in Warehouse Replication
+During early dry-run attempts of `scripts/replicate_warehouse_to_cloud.py`, all Gold and Monitoring tables were reported as skipped:
+```text
+Warning: dim_date not found in source schema, skipping.
+```
+- **Technical Root Cause:** When SQLAlchemy reflects tables with `MetaData(schema="gold")`, the reflected tables dictionary `source_meta.tables` stores keys qualified by their schema name (`"gold.dim_date"`, `"gold.fact_sales"`), rather than bare table names (`"dim_date"`). The iteration `if tbl_name not in source_meta_gold.tables:` checked for `"dim_date"` against `["gold.dim_date", ...]`, which evaluated to `False` and triggered false-positive skip warnings across all 19 tables.
+- **Resolution:** Updated lookup logic in `scripts/replicate_warehouse_to_cloud.py` to use fully qualified schema names (`f"{schema_name}.{tbl_name}"`), and refactored table recreation to use `src_tbl.to_metadata(target_meta)`. Verified 100% resolution across all 15 Gold tables and 4 Monitoring tables.
+
+### B. Replication Safety & Non-Destructive Operation
+- **Source Isolation Guard:** Implemented self-replication detection ensuring `target_url != source_url` and verifying that source database is strictly the local `opspulse_dw` warehouse.
+- **Target Pre-Inspection:** Script automatically inspects existing schemas and table row counts on target before issuing any writes.
+- **Non-Destructive Modes:** Defaults to `--mode safe` (preserves existing data and skips already populated tables); `--mode truncate` is only permitted when explicitly requested by command-line flag.
+- **Credential Masking:** Added `getpass.getpass()` so database connection strings are never visible in terminal logs, process lists, or shell history.
+
+### C. Cloud Connection Normalization
+- Neon, Supabase, and Render commonly generate PostgreSQL connection strings starting with `postgres://` or `postgresql://`.
+- Updated `backend/src/warehouse/db_connection.py` to automatically normalize incoming connection URLs to `postgresql+psycopg://` ensuring seamless compatibility with SQLAlchemy 2.0 and the Psycopg 3 binary driver without manual intervention.
