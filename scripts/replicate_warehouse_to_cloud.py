@@ -253,9 +253,27 @@ def migrate_warehouse(target_url: str) -> bool:
 
 
 if __name__ == "__main__":
+    import getpass
     parser = argparse.ArgumentParser(description="Replicate OpsPulse warehouse to Cloud PostgreSQL.")
-    parser.add_argument("--target-url", required=True, help="Target PostgreSQL connection URL")
+    parser.add_argument(
+        "--target-url",
+        required=False,
+        default=None,
+        help="Target PostgreSQL connection URL (optional; fallback to TARGET_DATABASE_URL env var or interactive hidden prompt)",
+    )
     args = parser.parse_args()
 
-    success = migrate_warehouse(args.target_url)
+    target_url = args.target_url or os.environ.get("TARGET_DATABASE_URL")
+    if not target_url:
+        try:
+            target_url = getpass.getpass("Enter target PostgreSQL connection URL (input hidden): ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nOperation cancelled.")
+            sys.exit(1)
+
+    if not target_url:
+        print("Error: No target PostgreSQL connection URL provided.")
+        sys.exit(1)
+
+    success = migrate_warehouse(target_url)
     sys.exit(0 if success else 1)
