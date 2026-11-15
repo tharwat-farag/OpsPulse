@@ -8,11 +8,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.pool import NullPool
 
 from warehouse.db_connection import get_database_engine
-from backend.api.index import app
+from backend.main import app
 
 
 def test_vercel_entrypoint_app():
-    """Verify that backend/api/index.py exports a valid FastAPI ASGI app."""
+    """Verify that backend/main.py exports a valid FastAPI ASGI app."""
     assert isinstance(app, FastAPI)
     assert app.title == "OpsPulse Live Analytics API"
 
