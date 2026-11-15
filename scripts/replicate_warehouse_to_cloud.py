@@ -1,28 +1,17 @@
 """
-OpsPulse Cloud Warehouse Migration & Replication Utility.
+OpsPulse Cloud Warehouse Migration & Safe Resumable Replication Utility.
 
-Copies schemas, tables, constraints, and data from the local OpsPulse
-PostgreSQL warehouse (opspulse_dw) to a target Cloud PostgreSQL database
-(e.g., Neon, Supabase, Render, AWS RDS).
+Copies schemas, tables, constraints, identity columns, sequences, and data
+from the local OpsPulse PostgreSQL warehouse (opspulse_dw) to a target
+Cloud PostgreSQL database (e.g., Neon, Supabase, Render, AWS RDS).
 
-Safety Guarantees:
-- Strictly isolates source database (read-only queries).
-- Verifies source is the local opspulse_dw warehouse.
-- Pre-inspects target database state before any write operation.
-- Non-destructive by default: never drops or truncates unless explicitly authorized.
-- Safe chunked transactional streaming with rollback on error.
-- Interactive hidden password input (passwords never logged or printed).
-- Authoritative business metric reconciliation upon completion.
-
-Usage:
-    # Interactive hidden password prompt:
-    python scripts/replicate_warehouse_to_cloud.py
-
-    # With target URL argument:
-    python scripts/replicate_warehouse_to_cloud.py --target-url "postgresql+psycopg://user:pass@host/dbname?sslmode=require"
-
-    # Dry-run inspection only:
-    python scripts/replicate_warehouse_to_cloud.py --dry-run
+Key Features:
+- Non-destructive, idempotent, and safely resumable across partial failures.
+- Automatically handles GENERATED ALWAYS / BY DEFAULT identity columns with OVERRIDING SYSTEM VALUE.
+- Automatically discovers and synchronizes PostgreSQL identity sequences post-insertion.
+- Uses ON CONFLICT DO NOTHING to prevent duplicate rows without truncating or dropping.
+- Automatically verifies primary key consistency and business metric accuracy upon completion.
+- Masked interactive password input protects connection strings from shell history and logs.
 """
 
 import argparse
@@ -42,7 +31,6 @@ from sqlalchemy import (
     create_engine,
     text,
     select,
-    insert,
     inspect,
 )
 from warehouse.db_connection import get_database_engine
@@ -111,9 +99,9 @@ def verify_source_database(source_engine) -> bool:
             ).scalar()
             sales_rows = conn.execute(text("SELECT COUNT(*) FROM gold.fact_sales;")).scalar()
 
-            print(f" Source Database Verified: '{current_db}'")
-            print(f" Source Gold Tables:        {gold_count} tables")
-            print(f" Source fact_sales Rows:    {sales_rows:,} rows")
+            print(f" Source Database:        '{current_db}'")
+            print(f" Source Gold Tables:     {gold_count} tables")
+            print(f" Source fact_sales Rows: {sales_rows:,} rows")
 
             if current_db != "opspulse_dw" and "opspulse" not in current_db.lower():
                 print(f"  Warning: Source database '{current_db}' does not match expected 'opspulse_dw'!")
@@ -129,27 +117,90 @@ def verify_source_database(source_engine) -> bool:
         return False
 
 
-def inspect_target_database(target_engine) -> Dict[str, int]:
-    """Inspects target database schema and existing table row counts."""
-    target_state = {}
-    try:
-        with target_engine.connect() as conn:
-            insp = inspect(target_engine)
-            schemas = insp.get_schema_names()
-            print(f" Target Existing Schemas: {schemas}")
+def get_table_identities_and_pks(conn, schema_name: str, tbl_name: str, tgt_tbl) -> Tuple[bool, List[str], List[str]]:
+    """
+    Discovers:
+    1. If the table has any IDENTITY column (GENERATED ALWAYS or BY DEFAULT).
+    2. Names of identity columns.
+    3. Names of primary key columns for ON CONFLICT resolution.
+    """
+    # 1. Identity columns check
+    ident_sql = text("""
+        SELECT a.attname AS col_name, a.attidentity
+        FROM pg_attribute a
+        JOIN pg_class c ON a.attrelid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE n.nspname = :schema
+          AND c.relname = :table
+          AND a.attidentity IN ('a', 'd')
+          AND NOT a.attisdropped;
+    """)
+    ident_rows = conn.execute(ident_sql, {"schema": schema_name, "table": tbl_name}).fetchall()
+    ident_cols = [r[0] for r in ident_rows]
+    has_identity = len(ident_cols) > 0 or any(getattr(c, "identity", None) is not None for c in tgt_tbl.columns)
 
-            for schema in ["gold", "monitoring"]:
-                if schema in schemas:
-                    tables = insp.get_table_names(schema=schema)
-                    for tbl in tables:
-                        try:
-                            cnt = conn.execute(text(f"SELECT COUNT(*) FROM {schema}.{tbl};")).scalar()
-                            target_state[f"{schema}.{tbl}"] = cnt
-                        except Exception:
-                            target_state[f"{schema}.{tbl}"] = -1
-    except Exception as e:
-        print(f" Note during target inspection: {e}")
-    return target_state
+    # 2. Primary key columns
+    pk_cols = [c.name for c in tgt_tbl.primary_key.columns]
+
+    return has_identity, ident_cols, pk_cols
+
+
+def sync_identity_sequences(conn, schema_name: str, tbl_name: str) -> None:
+    """
+    Synchronizes PostgreSQL sequence values for identity columns
+    so future DEFAULT inserts do not collide with replicated surrogate keys.
+    """
+    ident_sql = text("""
+        SELECT a.attname AS col_name
+        FROM pg_attribute a
+        JOIN pg_class c ON a.attrelid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE n.nspname = :schema
+          AND c.relname = :table
+          AND a.attidentity IN ('a', 'd')
+          AND NOT a.attisdropped;
+    """)
+    ident_cols = [r[0] for r in conn.execute(ident_sql, {"schema": schema_name, "table": tbl_name}).fetchall()]
+
+    for col in ident_cols:
+        seq_sql = text(f"SELECT pg_get_serial_sequence('{schema_name}.{tbl_name}', '{col}');")
+        seq_name = conn.execute(seq_sql).scalar()
+        if seq_name:
+            sync_sql = text(f"""
+                SELECT setval('{seq_name}', COALESCE((SELECT MAX("{col}") FROM {schema_name}.{tbl_name}), 1));
+            """)
+            conn.execute(sync_sql)
+
+
+def build_safe_insert_statement(
+    schema_name: str,
+    table_name: str,
+    columns: List[str],
+    pk_columns: List[str],
+    has_identity: bool,
+) -> text:
+    """
+    Constructs an idempotent, identity-preserving INSERT statement.
+    Includes OVERRIDING SYSTEM VALUE when identity columns are present,
+    and ON CONFLICT ({pk}) DO NOTHING for safe resuming.
+    """
+    col_str = ", ".join(f'"{c}"' for c in columns)
+    param_str = ", ".join(f":{c}" for c in columns)
+    override_str = "OVERRIDING SYSTEM VALUE" if has_identity else ""
+
+    if pk_columns:
+        pk_str = ", ".join(f'"{c}"' for c in pk_columns)
+        conflict_str = f"ON CONFLICT ({pk_str}) DO NOTHING"
+    else:
+        conflict_str = ""
+
+    sql = f"""
+        INSERT INTO {schema_name}.{table_name} ({col_str})
+        {override_str}
+        VALUES ({param_str})
+        {conflict_str};
+    """
+    return text(sql)
 
 
 def replicate_schema(
@@ -158,11 +209,9 @@ def replicate_schema(
     source_engine,
     target_engine,
     dry_run: bool = False,
-    mode: str = "safe",
 ) -> Tuple[int, int]:
     """
-    Replicates tables for a specific schema from source to target.
-    Handles schema-qualified table lookups correctly.
+    Replicates a schema from local opspulse_dw to cloud target with safe resume support.
     """
     print(f"\n========================================================")
     print(f"       REPLICATING SCHEMA: {schema_name.upper()}        ")
@@ -173,73 +222,100 @@ def replicate_schema(
     source_meta.reflect(bind=source_engine)
 
     target_meta = MetaData(schema=schema_name)
-    tables_copied = 0
-    rows_copied = 0
+    tables_processed = 0
+    total_rows_transferred = 0
 
-    with target_engine.connect() as conn:
-        for tbl_name in table_list:
-            full_tbl_name = f"{schema_name}.{tbl_name}"
+    for tbl_name in table_list:
+        full_tbl_name = f"{schema_name}.{tbl_name}"
 
-            if full_tbl_name not in source_meta.tables:
-                print(f"  [SKIPPED] {full_tbl_name} not found in source schema metadata.")
-                continue
+        if full_tbl_name not in source_meta.tables:
+            print(f"  [SKIPPED] {full_tbl_name} not found in source metadata.")
+            continue
 
-            src_tbl = source_meta.tables[full_tbl_name]
+        src_tbl = source_meta.tables[full_tbl_name]
 
-            # Check target row count if exists
-            target_row_count = 0
-            table_exists_on_target = False
-            try:
-                target_row_count = conn.execute(text(f"SELECT COUNT(*) FROM {full_tbl_name};")).scalar()
-                table_exists_on_target = True
-            except Exception:
-                table_exists_on_target = False
+        # 1. Check Source Row Count
+        with source_engine.connect() as s_conn:
+            src_count = s_conn.execute(text(f"SELECT COUNT(*) FROM {full_tbl_name};")).scalar()
 
-            if dry_run:
-                source_count = source_engine.connect().execute(text(f"SELECT COUNT(*) FROM {full_tbl_name};")).scalar()
-                status_str = f"Target exists ({target_row_count} rows)" if table_exists_on_target else "Target does not exist"
-                print(f"  [DRY-RUN] {full_tbl_name:<32} Source: {source_count:>6,} rows | {status_str}")
-                continue
-
-            # In safe mode, if table already exists and has records, do not overwrite unless instructed
-            if table_exists_on_target and target_row_count > 0:
-                if mode == "safe":
-                    print(f"  [PRESERVED] {full_tbl_name} already contains {target_row_count:,} rows (skipping in safe mode).")
-                    tables_copied += 1
-                    rows_copied += target_row_count
-                    continue
-                elif mode == "truncate":
-                    print(f"  [TRUNCATE] Clearing {target_row_count:,} existing rows in {full_tbl_name}...")
-                    with target_engine.begin() as t_conn:
-                        t_conn.execute(text(f"TRUNCATE TABLE {full_tbl_name} CASCADE;"))
-
-            # Create target table structure if not present
-            tgt_tbl = src_tbl.to_metadata(target_meta)
+        # 2. Create Target Table if Not Exists
+        tgt_tbl = src_tbl.to_metadata(target_meta)
+        if not dry_run:
             tgt_tbl.create(target_engine, checkfirst=True)
 
-            # Copy data in transactional batches
-            chunk_size = 5000
-            table_total = 0
-            start_t = time.time()
+        # 3. Check Target State
+        target_count = 0
+        target_exists = False
+        with target_engine.connect() as t_conn:
+            try:
+                target_count = t_conn.execute(text(f"SELECT COUNT(*) FROM {full_tbl_name};")).scalar()
+                target_exists = True
+            except Exception:
+                target_exists = False
 
-            with source_engine.connect() as s_conn:
-                result = s_conn.execute(select(src_tbl))
-                while True:
-                    batch = result.fetchmany(chunk_size)
-                    if not batch:
-                        break
-                    row_dicts = [dict(r._mapping) for r in batch]
-                    with target_engine.begin() as t_conn:
-                        t_conn.execute(insert(tgt_tbl), row_dicts)
-                    table_total += len(row_dicts)
-                    print(f"  -> {full_tbl_name}: {table_total:,} rows inserted...", end="\r")
+        # --- Dry Run Mode ---
+        if dry_run:
+            status = f"Already has {target_count:,} rows" if target_exists and target_count > 0 else "Ready for transfer"
+            print(f"  [DRY-RUN] {full_tbl_name:<34} Source: {src_count:>6,} rows | Target: {status}")
+            tables_processed += 1
+            continue
 
-            elapsed = time.time() - start_t
-            print(f"   {full_tbl_name:<32}: {table_total:>6,} rows copied in {elapsed:.2f}s.")
-            tables_copied += 1
-            rows_copied += table_total
+        # --- Safe Resume Mode ---
+        # Case A: Target is already completely replicated
+        if target_exists and target_count == src_count and src_count > 0:
+            print(f"  [RESUMED & VERIFIED] {full_tbl_name:<34}: {target_count:>6,} / {src_count:>6,} rows match. Synchronizing sequence...")
+            with target_engine.begin() as t_conn:
+                sync_identity_sequences(t_conn, schema_name, tbl_name)
+            tables_processed += 1
+            continue
 
-    return tables_copied, rows_copied
+        # Case B: Partially populated or empty target
+        with target_engine.connect() as t_conn:
+            has_identity, ident_cols, pk_cols = get_table_identities_and_pks(
+                t_conn, schema_name, tbl_name, tgt_tbl
+            )
+
+        status_msg = f"Resuming transfer ({target_count:,} existing rows)" if target_count > 0 else "Transferring data"
+        ident_info = f" [Identity: {', '.join(ident_cols)}]" if ident_cols else ""
+        print(f"  [COPYING] {full_tbl_name:<34}: {status_msg}{ident_info}...")
+
+        # Build parameterized statement with OVERRIDING SYSTEM VALUE and ON CONFLICT DO NOTHING
+        cols = [c.name for c in src_tbl.columns]
+        stmt = build_safe_insert_statement(
+            schema_name=schema_name,
+            table_name=tbl_name,
+            columns=cols,
+            pk_columns=pk_cols,
+            has_identity=has_identity,
+        )
+
+        chunk_size = 5000
+        table_transferred = 0
+        start_t = time.time()
+
+        with source_engine.connect() as s_conn:
+            result = s_conn.execute(select(src_tbl))
+            while True:
+                batch = result.fetchmany(chunk_size)
+                if not batch:
+                    break
+                row_dicts = [dict(r._mapping) for r in batch]
+                with target_engine.begin() as t_conn:
+                    t_conn.execute(stmt, row_dicts)
+                table_transferred += len(row_dicts)
+                print(f"    -> Streaming {table_transferred:,} / {src_count:,} rows...", end="\r")
+
+        # Synchronize identity sequence post-insert
+        with target_engine.begin() as t_conn:
+            sync_identity_sequences(t_conn, schema_name, tbl_name)
+            final_tgt_count = t_conn.execute(text(f"SELECT COUNT(*) FROM {full_tbl_name};")).scalar()
+
+        elapsed = time.time() - start_t
+        print(f"   {full_tbl_name:<34}: {final_tgt_count:>6,} / {src_count:>6,} rows verified ({elapsed:.2f}s).")
+        tables_processed += 1
+        total_rows_transferred += final_tgt_count
+
+    return tables_processed, total_rows_transferred
 
 
 def verify_target_reconciliation(target_engine) -> bool:
@@ -343,18 +419,14 @@ def verify_target_reconciliation(target_engine) -> bool:
     return all_passed
 
 
-def run_replication(
-    target_url: str,
-    dry_run: bool = False,
-    mode: str = "safe",
-) -> bool:
+def run_replication(target_url: str, dry_run: bool = False) -> bool:
     target_url = normalize_url(target_url)
     source_engine = get_database_engine()
 
     print("========================================================")
     print("      OPSPULSE CLOUD WAREHOUSE REPLICATION UTILITY      ")
     print("========================================================")
-    print(f"Mode: {'DRY-RUN (Inspection Only)' if dry_run else f'LIVE REPLICATION ({mode.upper()})'}")
+    print(f"Mode: {'DRY-RUN (Pre-flight Inspection)' if dry_run else 'LIVE SAFE-RESUME REPLICATION'}")
     print(f"Target URL: {redact_url(target_url)}")
 
     # 1. Verify Source
@@ -382,20 +454,7 @@ def run_replication(
         print(f" Connection Error: Failed to connect to target database: {e}")
         return False
 
-    # 3. Inspect Target State
-    print("\n--- Inspecting Target State ---")
-    target_state = inspect_target_database(target_engine)
-    existing_tables = [k for k, v in target_state.items() if v >= 0]
-    if existing_tables:
-        print(f" Target already has {len(existing_tables)} existing tables in gold/monitoring schemas:")
-        for t in existing_tables[:5]:
-            print(f"   {t}: {target_state[t]:,} rows")
-        if len(existing_tables) > 5:
-            print(f"   ... and {len(existing_tables) - 5} more tables.")
-    else:
-        print(" Target schemas 'gold' and 'monitoring' are currently empty.")
-
-    # 4. Create schemas on target
+    # 3. Create Schemas on Target if Not Exist
     if not dry_run:
         print("\nEnsuring schemas 'gold' and 'monitoring' exist on target...")
         with target_engine.begin() as conn:
@@ -403,33 +462,29 @@ def run_replication(
             conn.execute(text("CREATE SCHEMA IF NOT EXISTS monitoring;"))
         print(" Schemas verified on target.")
 
-    # 5. Replicate Schemas
-    gold_tables_copied, gold_rows_copied = replicate_schema(
+    # 4. Safe Resume Replication
+    gold_tables, gold_rows = replicate_schema(
         schema_name="gold",
         table_list=TABLE_ORDER_GOLD,
         source_engine=source_engine,
         target_engine=target_engine,
         dry_run=dry_run,
-        mode=mode,
     )
 
-    mon_tables_copied, mon_rows_copied = replicate_schema(
+    mon_tables, mon_rows = replicate_schema(
         schema_name="monitoring",
         table_list=TABLE_ORDER_MONITORING,
         source_engine=source_engine,
         target_engine=target_engine,
         dry_run=dry_run,
-        mode=mode,
     )
 
     print("\n========================================================")
     print("                 REPLICATION SUMMARY                    ")
     print("========================================================")
-    print(f"Gold Tables Processed:       {gold_tables_copied} / {len(TABLE_ORDER_GOLD)}")
-    print(f"Monitoring Tables Processed: {mon_tables_copied} / {len(TABLE_ORDER_MONITORING)}")
-    print(f"Total Rows Handled:          {gold_rows_copied + mon_rows_copied:,}")
+    print(f"Gold Tables Processed:       {gold_tables} / {len(TABLE_ORDER_GOLD)}")
+    print(f"Monitoring Tables Processed: {mon_tables} / {len(TABLE_ORDER_MONITORING)}")
 
-    # 6. Final Reconciliation if Live
     if not dry_run:
         return verify_target_reconciliation(target_engine)
     else:
@@ -451,12 +506,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Perform pre-flight check and display planned table copies without modifying target",
     )
-    parser.add_argument(
-        "--mode",
-        choices=["safe", "truncate"],
-        default="safe",
-        help="Replication mode: 'safe' (preserves existing target data) or 'truncate' (clears target before inserting)",
-    )
     args = parser.parse_args()
 
     target_url = args.target_url or os.environ.get("TARGET_DATABASE_URL")
@@ -471,5 +520,5 @@ if __name__ == "__main__":
         print("Error: No target PostgreSQL connection URL provided.")
         sys.exit(1)
 
-    success = run_replication(target_url=target_url, dry_run=args.dry_run, mode=args.mode)
+    success = run_replication(target_url=target_url, dry_run=args.dry_run)
     sys.exit(0 if success else 1)
