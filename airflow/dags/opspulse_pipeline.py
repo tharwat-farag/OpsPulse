@@ -8,13 +8,16 @@ from airflow.sdk import dag, task
 from airflow.task.trigger_rule import TriggerRule
 from sqlalchemy import inspect, text
 
-PROJECT_SRC = Path(
-    "/mnt/d/Data Engineer Projects/OpsPulse/backend/src"
-)
+candidate_paths = [
+    Path(__file__).resolve().parents[2] / "backend" / "src",
+    Path("/mnt/d/Data Engineer Projects/OpsPulse/backend/src"),
+    Path("D:/Data Engineer Projects/OpsPulse/backend/src"),
+]
+PROJECT_SRC = next((p for p in candidate_paths if p.exists()), None)
 
-if not PROJECT_SRC.exists():
+if not PROJECT_SRC or not PROJECT_SRC.exists():
     raise FileNotFoundError(
-        f"Project source directory not found: {PROJECT_SRC}"
+        f"Project source directory not found. Checked: {[str(p) for p in candidate_paths]}"
     )
 
 sys.path.insert(0, str(PROJECT_SRC))

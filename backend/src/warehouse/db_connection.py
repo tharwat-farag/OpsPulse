@@ -46,6 +46,13 @@ def get_database_engine() -> Engine:
             "OPSPULSE_DATABASE_URL environment variable is not set."
         )
 
+    # Normalize driver scheme for PostgreSQL (supporting postgres:// and postgresql:// with psycopg3)
+    database_url = database_url.strip().strip("'\"")
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql+psycopg://", 1)
+    elif database_url.startswith("postgresql://") and "+psycopg" not in database_url:
+        database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
     engine = create_engine(
         database_url,
         pool_pre_ping=True,

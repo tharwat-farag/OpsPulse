@@ -59,10 +59,13 @@ custom_cors = os.getenv("OPSPULSE_ALLOWED_ORIGINS")
 if custom_cors:
     ALLOWED_ORIGINS.extend([orig.strip() for orig in custom_cors.split(",") if orig.strip()])
 
+# Standard CORS compliance: cannot use allow_credentials=True with wildcard origin
+allow_credentials = "*" not in ALLOWED_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
