@@ -142,7 +142,7 @@ This document serves as the authoritative enterprise reference for all operation
   $$\text{Total OpEx} = \sum (\text{amount})$$
 - **Source Table:** `gold.fact_operating_expenses` join `gold.dim_date`
 - **Grain:** Expense transaction record.
-- **Verified 2025 Baseline:** **$39,631,974.00** (across 2,000 expense records).
+- **Verified 2025 Baseline:** **$39,631,974.10** (across 2,000 expense records).
 - **Categories:** Salaries & Wages ($18.6M, 46.9%), Facility Rent ($13.1M, 33.0%), Logistics & Freight ($8.0M, 20.1%).
 
 ### 4.2 OpEx to Net Revenue Ratio

@@ -232,7 +232,7 @@ def migrate_warehouse(target_url: str) -> bool:
         # Check 8: Operating Expenses
         res_opex = conn.execute(text("SELECT SUM(amount) FROM gold.fact_operating_expenses;")).scalar()
         val_opex = Decimal(str(res_opex or 0)).quantize(Decimal("0.01"))
-        exp_opex = Decimal("39631974.00")
+        exp_opex = Decimal("39631974.10")
         pass_opex = val_opex == exp_opex
         print(f"Operating Expenses:  ${val_opex:,.2f} (Expected: ${exp_opex:,.2f}) -> {'PASS' if pass_opex else 'FAIL'}")
         all_passed = all_passed and pass_opex

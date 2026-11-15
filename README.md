@@ -207,7 +207,7 @@ All metrics displayed across the platform reconcile 100% with the PostgreSQL war
 | **Goods Receipt Acceptance Rate** | **95.7% (Avg)** | **95.7%** per-receipt average; **97.7%** aggregate accepted units (48,048 / 49,184) |
 | **Supplier OTIF Delivery Rate** | **94.2%** | Dock receipts delivered on-time meeting specifications |
 | **Average Supplier Lead Time** | **8.4 Business Days** | Time elapsed between PO order placement and dock warehouse delivery |
-| **Total Operating Expenses (OpEx)** | **$39,631,974.00** | Full year 2025 operating expenditures (11.1% OpEx-to-Net Revenue ratio) |
+| **Total Operating Expenses (OpEx)** | **$39,631,974.10** | Full year 2025 operating expenditures (11.1% OpEx-to-Net Revenue ratio) |
 
 ---
 

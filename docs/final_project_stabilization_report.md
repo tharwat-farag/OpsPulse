@@ -101,7 +101,7 @@ All business metrics displayed on the frontend reconcile precisely with direct P
 | **2025 Gross Sales Amount** | $380,108,747.31 | `SUM(s.gross_amount) WHERE d.year_number = 2025` = **$380,108,747.31** | 0 (Exact Match) |
 | **2025 Total Discounts** | $22,681,878.26 | `SUM(s.discount_amount) WHERE d.year_number = 2025` = **$22,681,878.26** | 0 (Exact Match) |
 | **2025 Net Sales Revenue** | $357,426,869.05 | `SUM(s.net_revenue) WHERE d.year_number = 2025` = **$357,426,869.05** | 0 (Exact Match) |
-| **2025 Total OpEx** | $39,631,974.00 | `SUM(amount) WHERE d.year_number = 2025` = **$39,631,974.00** | 0 (Exact Match) |
+| **2025 Total OpEx** | $39,631,974.10 | `SUM(amount) WHERE d.year_number = 2025` = **$39,631,974.10** | 0 (Exact Match) |
 | **2025 Gross Profit** | $45,431,649.88 | `SUM(s.gross_profit) WHERE d.year_number = 2025` = **$45,431,649.88** | 0 (Exact Match) |
 | **Gross Margin %** | 12.71% | ($45,431,649.88 / $357,426,869.05) * 100 = **12.71%** | 0 (Exact Match) |
 | **Stockout Rate (Latest)** | 18.0% | `COUNT(is_stockout = true) / 300` at date_key 20251231 = **18.0%** (54 / 300) | 0 (Exact Match) |
