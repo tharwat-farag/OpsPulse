@@ -10,16 +10,6 @@ from warehouse.db_connection import get_database_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-BATCH_ID = "batch_20261111_124227_c8e6ab39"
-
-SOURCE_FILE = (
-    PROJECT_ROOT
-    / "data"
-    / "silver"
-    / BATCH_ID
-    / "warehouses.csv"
-)
-
 BASELINE_DATE = date(2025, 1, 1)
 
 REQUIRED_COLUMNS = {
@@ -72,13 +62,24 @@ def parse_boolean(value: str) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
-def read_warehouses():
-    if not SOURCE_FILE.exists():
+def read_warehouses(batch_id: str) -> list[dict]:
+    if not batch_id or not batch_id.strip():
+        raise ValueError("batch_id must not be empty.")
+
+    source_file = (
+        PROJECT_ROOT
+        / "data"
+        / "silver"
+        / batch_id
+        / "warehouses.csv"
+    )
+
+    if not source_file.exists():
         raise FileNotFoundError(
-            f"Source file not found: {SOURCE_FILE}"
+            f"Source file not found: {source_file}"
         )
 
-    with SOURCE_FILE.open(
+    with source_file.open(
         mode="r",
         encoding="utf-8-sig",
         newline=""
@@ -127,11 +128,17 @@ def read_warehouses():
                 f"Missing required value for warehouse {warehouse_id}"
             )
 
-        capacity_units = int(row["capacity_units"])
+        try:
+            capacity_units = int(row["capacity_units"].strip())
+        except (ValueError, AttributeError) as exc:
+            raise ValueError(
+                f"Invalid capacity for warehouse {warehouse_id}: "
+                f"{row['capacity_units']}"
+            ) from exc
 
         if capacity_units <= 0:
             raise ValueError(
-                f"Invalid capacity for warehouse {warehouse_id}"
+                f"Capacity must be positive for warehouse {warehouse_id}"
             )
 
         records.append({
@@ -147,32 +154,50 @@ def read_warehouses():
     return records
 
 
-def main():
+def main(batch_id: str) -> None:
     print("Starting Warehouse Dimension Initial Load...")
+    print(f"Batch ID: {batch_id}")
 
-    warehouses = read_warehouses()
+    warehouses = read_warehouses(batch_id)
 
     print(f"Source records validated: {len(warehouses)}")
 
     engine = get_database_engine()
 
-    with engine.begin() as connection:
-        result = connection.execute(
-            INSERT_WAREHOUSE_SQL,
-            warehouses
-        )
+    try:
+        with engine.begin() as connection:
+            result = connection.execute(
+                INSERT_WAREHOUSE_SQL,
+                warehouses
+            )
 
-        inserted_count = result.rowcount
+            inserted_count = result.rowcount
 
-    skipped_count = len(warehouses) - inserted_count
+        skipped_count = len(warehouses) - inserted_count
 
-    print("\nWarehouse Dimension Load Summary")
-    print("--------------------------------")
-    print(f"Source records:   {len(warehouses)}")
-    print(f"Inserted records: {inserted_count}")
-    print(f"Skipped records:  {skipped_count}")
-    print("Load completed successfully.")
+        print("\nWarehouse Dimension Load Summary")
+        print("--------------------------------")
+        print(f"Source records:   {len(warehouses)}")
+        print(f"Inserted records: {inserted_count}")
+        print(f"Skipped records:  {skipped_count}")
+        print("Load completed successfully.")
+
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Load Warehouse Dimension from a Silver batch."
+    )
+
+    parser.add_argument(
+        "--batch-id",
+        required=True,
+        help="Silver batch ID to load."
+    )
+
+    args = parser.parse_args()
+    main(args.batch_id)

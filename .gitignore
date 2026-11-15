@@ -39,11 +39,12 @@ pnpm-debug.log*
 .idea/
 
 # ==========================================
-# Operating System
+# Operating System & Local Hardware
 # ==========================================
 .DS_Store
 Thumbs.db
 Desktop.ini
+.wslconfig*
 
 # ==========================================
 # Logs
@@ -71,3 +72,8 @@ data/gold/*
 *.tmp
 *.bak
 *.swp
+
+
+# Database backups
+backups/
+*.dump

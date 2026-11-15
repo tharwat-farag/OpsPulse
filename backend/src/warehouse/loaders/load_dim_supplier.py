@@ -11,16 +11,6 @@ from warehouse.db_connection import get_database_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-BATCH_ID = "batch_20261111_124227_c8e6ab39"
-
-SOURCE_FILE = (
-    PROJECT_ROOT
-    / "data"
-    / "silver"
-    / BATCH_ID
-    / "suppliers.csv"
-)
-
 BASELINE_DATE = date(2025, 1, 1)
 
 REQUIRED_COLUMNS = {
@@ -73,13 +63,24 @@ def parse_boolean(value: str) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
-def read_suppliers():
-    if not SOURCE_FILE.exists():
+def read_suppliers(batch_id: str) -> list[dict]:
+    if not batch_id or not batch_id.strip():
+        raise ValueError("batch_id must not be empty.")
+
+    source_file = (
+        PROJECT_ROOT
+        / "data"
+        / "silver"
+        / batch_id
+        / "suppliers.csv"
+    )
+
+    if not source_file.exists():
         raise FileNotFoundError(
-            f"Source file not found: {SOURCE_FILE}"
+            f"Source file not found: {source_file}"
         )
 
-    with SOURCE_FILE.open(
+    with source_file.open(
         mode="r",
         encoding="utf-8-sig",
         newline=""
@@ -135,7 +136,10 @@ def read_suppliers():
                 f"Invalid rating for supplier {supplier_id}"
             ) from exc
 
-        if not rating.is_finite() or not Decimal("0") <= rating <= Decimal("5"):
+        if (
+            not rating.is_finite()
+            or not Decimal("0") <= rating <= Decimal("5")
+        ):
             raise ValueError(
                 f"Rating out of range for supplier {supplier_id}: {rating}"
             )
@@ -153,32 +157,50 @@ def read_suppliers():
     return records
 
 
-def main():
+def main(batch_id: str) -> None:
     print("Starting Supplier Dimension Initial Load...")
+    print(f"Batch ID: {batch_id}")
 
-    suppliers = read_suppliers()
+    suppliers = read_suppliers(batch_id)
 
     print(f"Source records validated: {len(suppliers)}")
 
     engine = get_database_engine()
 
-    with engine.begin() as connection:
-        result = connection.execute(
-            INSERT_SUPPLIER_SQL,
-            suppliers
-        )
+    try:
+        with engine.begin() as connection:
+            result = connection.execute(
+                INSERT_SUPPLIER_SQL,
+                suppliers
+            )
 
-        inserted_count = result.rowcount
+            inserted_count = result.rowcount
 
-    skipped_count = len(suppliers) - inserted_count
+        skipped_count = len(suppliers) - inserted_count
 
-    print("\nSupplier Dimension Load Summary")
-    print("--------------------------------")
-    print(f"Source records:   {len(suppliers)}")
-    print(f"Inserted records: {inserted_count}")
-    print(f"Skipped records:  {skipped_count}")
-    print("Load completed successfully.")
+        print("\nSupplier Dimension Load Summary")
+        print("--------------------------------")
+        print(f"Source records:   {len(suppliers)}")
+        print(f"Inserted records: {inserted_count}")
+        print(f"Skipped records:  {skipped_count}")
+        print("Load completed successfully.")
+
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Load Supplier Dimension from a Silver batch."
+    )
+
+    parser.add_argument(
+        "--batch-id",
+        required=True,
+        help="Silver batch ID to load."
+    )
+
+    args = parser.parse_args()
+    main(args.batch_id)

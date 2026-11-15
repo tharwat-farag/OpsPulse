@@ -1,4 +1,5 @@
 
+import argparse
 import json
 from datetime import datetime
 from pathlib import Path
@@ -14,22 +15,6 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BRONZE_DIR = PROJECT_ROOT / "data" / "bronze"
 SILVER_DIR = PROJECT_ROOT / "data" / "silver"
-
-
-def find_latest_batch():
-    """Find the latest Bronze batch containing an ingestion manifest."""
-
-    batches = [
-        folder
-        for folder in BRONZE_DIR.iterdir()
-        if folder.is_dir()
-        and (folder / "ingestion_manifest.json").exists()
-    ]
-
-    if not batches:
-        raise FileNotFoundError("No valid Bronze batch found.")
-
-    return max(batches, key=lambda folder: folder.stat().st_mtime)
 
 
 # ==========================================
@@ -351,15 +336,48 @@ def save_outputs(
 # 8. MAIN PIPELINE
 # ==========================================
 
-def main():
+def main(batch_id: str) -> dict:
+
+    if not batch_id or not batch_id.strip():
+        raise ValueError("batch_id must be provided.")
+
+    batch_id = batch_id.strip()
+
+    if Path(batch_id).name != batch_id:
+        raise ValueError("Invalid batch_id.")
 
     print("=" * 55)
     print("BRONZE TO SILVER: PRODUCTS TRANSFORMATION")
     print("=" * 55)
 
-    bronze_batch = find_latest_batch()
+    # Use the exact batch received from Airflow.
+    bronze_batch = BRONZE_DIR / batch_id
 
-    batch_id = bronze_batch.name
+    if not bronze_batch.is_dir():
+        raise FileNotFoundError(
+            f"Bronze batch directory not found: {bronze_batch}"
+        )
+
+    ingestion_manifest = (
+        bronze_batch / "ingestion_manifest.json"
+    )
+
+    if not ingestion_manifest.exists():
+        raise FileNotFoundError(
+            f"Ingestion manifest not found: {ingestion_manifest}"
+        )
+
+    with open(
+        ingestion_manifest,
+        "r",
+        encoding="utf-8"
+    ) as file:
+        source_manifest = json.load(file)
+
+    if source_manifest.get("batch_id") != batch_id:
+        raise ValueError(
+            "Ingestion manifest batch_id does not match requested batch_id."
+        )
 
     source_path = bronze_batch / "products.csv"
 
@@ -426,6 +444,30 @@ def main():
 
     print("\nBRONZE TO SILVER PRODUCTS TRANSFORMATION COMPLETED!")
 
+    return {
+        "batch_id": batch_id,
+        "input_records": input_count,
+        "valid_records": len(silver_df),
+        "quarantined_records": len(quarantine_df),
+        "status": "SUCCESS",
+    }
+
+
+# ==========================================
+# 9. SCRIPT ENTRY POINT
+# ==========================================
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Transform products from Bronze to Silver."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        help="The exact Bronze ingestion batch ID to process."
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)

@@ -1,4 +1,5 @@
 
+import argparse
 import json
 import re
 from datetime import datetime
@@ -23,31 +24,7 @@ EMAIL_PATTERN = (
 
 
 # ==========================================
-# 2. FIND LATEST BRONZE BATCH
-# ==========================================
-
-def find_latest_batch():
-
-    batches = [
-        folder
-        for folder in BRONZE_DIR.iterdir()
-        if folder.is_dir()
-        and (folder / "ingestion_manifest.json").exists()
-    ]
-
-    if not batches:
-        raise FileNotFoundError(
-            "No Bronze batch found."
-        )
-
-    return max(
-        batches,
-        key=lambda folder: folder.stat().st_mtime
-    )
-
-
-# ==========================================
-# 3. LOAD SUPPLIERS
+# 2. LOAD SUPPLIERS
 # ==========================================
 
 def load_suppliers(source_path):
@@ -62,7 +39,7 @@ def load_suppliers(source_path):
 
 
 # ==========================================
-# 4. STANDARDIZATION
+# 3. STANDARDIZATION
 # ==========================================
 
 def standardize_suppliers(df):
@@ -117,7 +94,7 @@ def standardize_suppliers(df):
 
 
 # ==========================================
-# 5. DATA QUALITY VALIDATION
+# 4. DATA QUALITY VALIDATION
 # ==========================================
 
 def validate_suppliers(df):
@@ -225,7 +202,7 @@ def validate_suppliers(df):
 
 
 # ==========================================
-# 6. BUSINESS TRANSFORMATIONS
+# 5. BUSINESS TRANSFORMATIONS
 # ==========================================
 
 def apply_business_transformations(df):
@@ -262,7 +239,7 @@ def apply_business_transformations(df):
 
 
 # ==========================================
-# 7. SILVER VALIDATION
+# 6. SILVER VALIDATION
 # ==========================================
 
 def validate_silver(
@@ -339,7 +316,7 @@ def validate_silver(
 
 
 # ==========================================
-# 8. SAVE SILVER OUTPUTS
+# 7. SAVE SILVER OUTPUTS
 # ==========================================
 
 def save_outputs(
@@ -404,18 +381,53 @@ def save_outputs(
 
 
 # ==========================================
-# 9. MAIN PIPELINE
+# 8. MAIN PIPELINE
 # ==========================================
 
-def main():
+def main(batch_id: str) -> dict:
+
+    if not batch_id or not batch_id.strip():
+        raise ValueError("batch_id must be provided.")
+
+    batch_id = batch_id.strip()
+
+    if Path(batch_id).name != batch_id:
+        raise ValueError("Invalid batch_id.")
 
     print("=" * 55)
     print("BRONZE TO SILVER: SUPPLIERS TRANSFORMATION")
     print("=" * 55)
 
-    bronze_batch = find_latest_batch()
+    # Use the exact batch received from Airflow
+    bronze_batch = BRONZE_DIR / batch_id
 
-    batch_id = bronze_batch.name
+    if not bronze_batch.is_dir():
+        raise FileNotFoundError(
+            f"Bronze batch directory not found: {bronze_batch}"
+        )
+
+    # Validate ingestion manifest
+    ingestion_manifest = (
+        bronze_batch / "ingestion_manifest.json"
+    )
+
+    if not ingestion_manifest.exists():
+        raise FileNotFoundError(
+            f"Ingestion manifest not found: {ingestion_manifest}"
+        )
+
+    with open(
+        ingestion_manifest,
+        "r",
+        encoding="utf-8"
+    ) as file:
+
+        source_manifest = json.load(file)
+
+    if source_manifest.get("batch_id") != batch_id:
+        raise ValueError(
+            "Ingestion manifest batch_id does not match requested batch_id."
+        )
 
     source_path = bronze_batch / "suppliers.csv"
 
@@ -427,32 +439,51 @@ def main():
 
     silver_batch_dir = SILVER_DIR / batch_id
 
-    # Load
+    # Step 1: Load
     raw_df = load_suppliers(source_path)
+
+    required_columns = [
+        "supplier_id",
+        "supplier_name",
+        "city",
+        "contact_email",
+        "rating",
+        "is_active"
+    ]
+
+    missing_columns = [
+        column for column in required_columns
+        if column not in raw_df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing required supplier columns: {missing_columns}"
+        )
 
     input_count = len(raw_df)
 
-    # Standardize
+    # Step 2: Standardize
     standardized_df = standardize_suppliers(raw_df)
 
-    # Validate
+    # Step 3: Validate
     valid_df, quarantine_df = validate_suppliers(
         standardized_df
     )
 
-    # Business transformations
+    # Step 4: Business transformations
     silver_df = apply_business_transformations(
         valid_df
     )
 
-    # Validate Silver
+    # Step 5: Validate Silver
     validate_silver(
         silver_df,
         input_count,
         len(quarantine_df)
     )
 
-    # Save
+    # Step 6: Save
     save_outputs(
         silver_batch_dir,
         silver_df,
@@ -461,7 +492,7 @@ def main():
         batch_id
     )
 
-    # Summary
+    # Step 7: Summary
     print("\n" + "=" * 55)
     print("TRANSFORMATION SUMMARY")
     print("=" * 55)
@@ -493,6 +524,30 @@ def main():
         "\nBRONZE TO SILVER SUPPLIERS TRANSFORMATION COMPLETED!"
     )
 
+    return {
+        "batch_id": batch_id,
+        "input_records": input_count,
+        "valid_records": len(silver_df),
+        "quarantined_records": len(quarantine_df),
+        "status": "SUCCESS"
+    }
+
+
+# ==========================================
+# 9. SCRIPT ENTRY POINT
+# ==========================================
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Transform suppliers from Bronze to Silver."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        help="The exact Bronze ingestion batch ID to process."
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)

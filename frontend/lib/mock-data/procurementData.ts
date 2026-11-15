@@ -1,0 +1,138 @@
+/**
+ * Demo Mock Data: Procurement Analytics
+ */
+
+import { KpiMetric, PurchaseOrder } from "@/types";
+
+export const PROCUREMENT_KPIS: KpiMetric[] = [
+  {
+    title: "Committed PO Spend (MTD)",
+    value: "$485,200",
+    numericValue: 485200,
+    changePct: 6.4,
+    isPositive: false,
+    trend: "up",
+    caption: "Across 42 active purchase orders",
+    iconName: "FileCheck",
+  },
+  {
+    title: "Avg Supplier Lead Time",
+    value: "8.4 Days",
+    numericValue: 8.4,
+    changePct: -1.2,
+    isPositive: true,
+    trend: "down",
+    caption: "Target benchmark < 10.0 days",
+    iconName: "Clock",
+  },
+  {
+    title: "On-Time In-Full Delivery (OTIF)",
+    value: "94.2%",
+    numericValue: 94.2,
+    changePct: 2.1,
+    isPositive: true,
+    trend: "up",
+    caption: "+3.2% vs previous quarter",
+    iconName: "Truck",
+  },
+  {
+    title: "Goods Receipts Processed",
+    value: "1,453 Receipts",
+    numericValue: 1453,
+    changePct: 8.9,
+    isPositive: true,
+    trend: "up",
+    caption: "Verified across warehouses",
+    iconName: "PackageCheck",
+  },
+  {
+    title: "PO Invoice Match Rate",
+    value: "99.1%",
+    numericValue: 99.1,
+    changePct: 0.4,
+    isPositive: true,
+    trend: "up",
+    caption: "Automated 3-way reconciliation",
+    iconName: "CheckCheck",
+  },
+  {
+    title: "Pending Approval Value",
+    value: "$64,500",
+    numericValue: 64500,
+    changePct: -12.0,
+    isPositive: true,
+    trend: "down",
+    caption: "4 draft POs in queue",
+    iconName: "Clock4",
+  },
+];
+
+export const PO_STATUS_BREAKDOWN = [
+  { status: "Received & Closed", count: 26, value: 312000, color: "#10B981" },
+  { status: "Partially Received", count: 8, value: 98500, color: "#06B6D4" },
+  { status: "Submitted / In Transit", count: 5, value: 52400, color: "#2563EB" },
+  { status: "Draft", count: 3, value: 22300, color: "#F59E0B" },
+];
+
+export const PURCHASE_ORDERS_LIST: PurchaseOrder[] = [
+  {
+    poNumber: "PO-2026-8842",
+    supplierName: "Apex Global Industrial Ltd",
+    orderDate: "2026-11-12",
+    expectedDate: "2026-11-18",
+    totalAmount: 42500.0,
+    lineCount: 8,
+    status: "submitted",
+    paymentStatus: "pending",
+  },
+  {
+    poNumber: "PO-2026-8841",
+    supplierName: "OmniTech Hardware Solutions",
+    orderDate: "2026-11-10",
+    expectedDate: "2026-11-15",
+    totalAmount: 28400.0,
+    lineCount: 4,
+    status: "partially_received",
+    paymentStatus: "pending",
+  },
+  {
+    poNumber: "PO-2026-8840",
+    supplierName: "EcoPack Sustainable Corp",
+    orderDate: "2026-11-08",
+    expectedDate: "2026-11-12",
+    totalAmount: 18900.0,
+    lineCount: 12,
+    status: "received",
+    paymentStatus: "paid",
+  },
+  {
+    poNumber: "PO-2026-8839",
+    supplierName: "Midland Steel & Fabrication",
+    orderDate: "2026-11-05",
+    expectedDate: "2026-11-14",
+    totalAmount: 64200.0,
+    lineCount: 6,
+    status: "received",
+    paymentStatus: "paid",
+  },
+  {
+    poNumber: "PO-2026-8838",
+    supplierName: "Vanguard Protective Gear",
+    orderDate: "2026-11-04",
+    expectedDate: "2026-11-10",
+    totalAmount: 9450.0,
+    lineCount: 3,
+    status: "received",
+    paymentStatus: "paid",
+  },
+  {
+    poNumber: "PO-2026-8837",
+    supplierName: "Quantum Automation Systems",
+    orderDate: "2026-11-14",
+    expectedDate: "2026-11-22",
+    totalAmount: 22300.0,
+    lineCount: 5,
+    status: "draft",
+    paymentStatus: "pending",
+  },
+];

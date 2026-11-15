@@ -278,6 +278,9 @@ def main():
 
     print("\nRAW TO BRONZE INGESTION COMPLETED!")
 
+    # Return batch_id for Airflow XCom.
+    return batch_id
+
 
 # ==================================================
 # 7. SCRIPT ENTRY POINT

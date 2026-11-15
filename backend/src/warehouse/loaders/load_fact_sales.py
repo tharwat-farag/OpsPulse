@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import argparse
 
 import pandas as pd
 from sqlalchemy import text
@@ -13,22 +14,8 @@ from warehouse.db_connection import get_database_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-BATCH_ID = "batch_20261111_124227_c8e6ab39"
-
-SOURCE_FILE = (
-    PROJECT_ROOT
-    / "data"
-    / "silver"
-    / BATCH_ID
-    / "sales.csv"
-)
-
 STAGING_TABLE = "stg_sales"
-
-# PostgreSQL parameter limit safety:
-# 1000 rows x 15 columns = 15000 parameters per batch.
 CHUNK_SIZE = 1000
-
 
 REQUIRED_COLUMNS = [
     "sales_line_id",
@@ -53,15 +40,23 @@ REQUIRED_COLUMNS = [
 # 1. READ AND VALIDATE SILVER DATA
 # =========================================================
 
-def read_sales_data() -> pd.DataFrame:
+def read_sales_data(batch_id: str) -> pd.DataFrame:
 
-    if not SOURCE_FILE.exists():
+    source_file = (
+        PROJECT_ROOT
+        / "data"
+        / "silver"
+        / batch_id
+        / "sales.csv"
+    )
+
+    if not source_file.exists():
         raise FileNotFoundError(
-            f"Silver sales file not found: {SOURCE_FILE}"
+            f"Silver sales file not found: {source_file}"
         )
 
     df = pd.read_csv(
-        SOURCE_FILE,
+        source_file,
         parse_dates=["sale_date"],
     )
 
@@ -107,7 +102,7 @@ def read_sales_data() -> pd.DataFrame:
 
 def load_to_staging(
     engine,
-    df: pd.DataFrame
+    df: pd.DataFrame,
 ) -> None:
 
     print("\nLoading data into Staging...")
@@ -187,6 +182,7 @@ def validate_dimension_matches(engine) -> None:
     """)
 
     with engine.connect() as connection:
+
         result = connection.execute(
             validation_sql
         ).mappings().one()
@@ -317,30 +313,114 @@ def load_fact_sales(engine) -> None:
 
 def reconcile_sales(
     engine,
-    source_count: int
+    source_count: int,
 ) -> None:
 
     reconciliation_sql = text("""
         SELECT
-            COUNT(*) AS fact_rows,
+
+            COUNT(*) AS source_rows,
+
+            COUNT(DISTINCT s.sales_line_id)
+                AS unique_source_lines,
 
             COUNT(DISTINCT f.sales_line_id)
-                AS unique_sales_lines,
+                AS unique_fact_lines,
 
-            SUM(f.gross_amount) AS gross_amount,
+            COUNT(*) FILTER (
+                WHERE
+                    f.sales_line_id IS NULL
 
-            SUM(f.discount_amount) AS discount_amount,
+                    OR f.invoice_id IS DISTINCT FROM s.invoice_id
 
-            SUM(f.net_revenue) AS net_revenue,
+                    OR f.date_key IS DISTINCT FROM d.date_key
 
-            SUM(f.total_cost) AS total_cost,
+                    OR f.product_key IS DISTINCT FROM p.product_key
 
-            SUM(f.gross_profit) AS gross_profit
+                    OR f.customer_key IS DISTINCT FROM c.customer_key
 
-        FROM gold.fact_sales f
+                    OR f.branch_key IS DISTINCT FROM b.branch_key
 
-        INNER JOIN staging.stg_sales s
-            ON s.sales_line_id = f.sales_line_id;
+                    OR f.sales_channel_key
+                        IS DISTINCT FROM ch.sales_channel_key
+
+                    OR f.quantity IS DISTINCT FROM s.quantity
+
+                    OR ABS(
+                        f.unit_price - s.unit_price
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.unit_cost - s.unit_cost
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.gross_amount - s.gross_amount
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.discount_amount - s.discount_amount
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.net_revenue - s.net_revenue
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.total_cost - s.total_cost
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.gross_profit - s.gross_profit
+                    ) > 0.000001
+
+            ) AS mismatched_rows,
+
+            SUM(s.gross_amount) AS source_gross_amount,
+
+            SUM(f.gross_amount) AS fact_gross_amount,
+
+            SUM(s.discount_amount) AS source_discount_amount,
+
+            SUM(f.discount_amount) AS fact_discount_amount,
+
+            SUM(s.net_revenue) AS source_net_revenue,
+
+            SUM(f.net_revenue) AS fact_net_revenue,
+
+            SUM(s.total_cost) AS source_total_cost,
+
+            SUM(f.total_cost) AS fact_total_cost,
+
+            SUM(s.gross_profit) AS source_gross_profit,
+
+            SUM(f.gross_profit) AS fact_gross_profit
+
+        FROM staging.stg_sales s
+
+        LEFT JOIN gold.fact_sales f
+            ON f.sales_line_id = s.sales_line_id
+
+        LEFT JOIN gold.dim_date d
+            ON d.full_date = s.sale_date::date
+
+        LEFT JOIN gold.dim_product p
+            ON p.product_id = s.product_id
+           AND p.valid_from <= s.sale_date::date
+           AND s.sale_date::date < p.valid_to
+
+        LEFT JOIN gold.dim_customer c
+            ON c.customer_id = s.customer_id
+           AND c.valid_from <= s.sale_date::date
+           AND s.sale_date::date < c.valid_to
+
+        LEFT JOIN gold.dim_branch b
+            ON b.branch_id = s.branch_id
+           AND b.valid_from <= s.sale_date::date
+           AND s.sale_date::date < b.valid_to
+
+        LEFT JOIN gold.dim_sales_channel ch
+            ON ch.sales_channel_name = s.sales_channel;
     """)
 
     with engine.connect() as connection:
@@ -354,16 +434,24 @@ def reconcile_sales(
     for key, value in result.items():
         print(f"{key}: {value}")
 
-    if result["fact_rows"] != source_count:
+    if result["source_rows"] != source_count:
         raise ValueError(
-            "Reconciliation failed: "
-            "Fact Sales count does not match Silver."
+            "Reconciliation failed: source row count mismatch."
         )
 
-    if result["unique_sales_lines"] != source_count:
+    if result["unique_source_lines"] != source_count:
         raise ValueError(
-            "Reconciliation failed: "
-            "Duplicate or missing sales lines."
+            "Reconciliation failed: duplicate source sales lines."
+        )
+
+    if result["unique_fact_lines"] != source_count:
+        raise ValueError(
+            "Reconciliation failed: missing fact sales lines."
+        )
+
+    if result["mismatched_rows"] != 0:
+        raise ValueError(
+            "Reconciliation failed: Silver and Gold values do not match."
         )
 
     print("Silver-to-Gold reconciliation: PASSED")
@@ -373,29 +461,33 @@ def reconcile_sales(
 # 6. MAIN EXECUTION
 # =========================================================
 
-def main() -> None:
+def main(batch_id: str) -> None:
+
+    if not batch_id or not batch_id.strip():
+        raise ValueError("A valid batch_id is required.")
 
     print("=" * 55)
     print("OPSPULSE - FACT SALES LOADER")
+    print(f"Batch ID: {batch_id}")
     print("=" * 55)
 
     engine = get_database_engine()
 
     try:
 
-        # Step 1
-        df = read_sales_data()
+        # Step 1: Read Silver data
+        df = read_sales_data(batch_id)
 
-        # Step 2
+        # Step 2: Load Staging
         load_to_staging(engine, df)
 
-        # Step 3
+        # Step 3: Validate dimensions
         validate_dimension_matches(engine)
 
-        # Step 4
+        # Step 4: Load Gold Fact
         load_fact_sales(engine)
 
-        # Step 5
+        # Step 5: Reconcile Silver and Gold
         reconcile_sales(engine, len(df))
 
         print("\n" + "=" * 55)
@@ -406,5 +498,22 @@ def main() -> None:
         engine.dispose()
 
 
+# =========================================================
+# 7. COMMAND LINE EXECUTION
+# =========================================================
+
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Load Sales data into Gold."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        type=str,
+        help="Silver batch ID to process.",
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)

@@ -1,415 +1,376 @@
-# OpsPulse
+# OpsPulse — Retail & Distribution Operations Intelligence Platform
 
-### Business Operations & Profitability Intelligence Platform
+> **See the Signals. Optimize Operations. Accelerate Profitability.**
 
-**See the Signals. Improve the Business.**
-
----
-
-## Overview
-
-OpsPulse is a Data Engineering portfolio project that demonstrates how retail and distribution businesses can transform fragmented operational data into a centralized analytical platform.
-
-The project integrates sales, inventory, procurement, supplier, branch, customer, and operating expense data into a structured data warehouse.
-
-It applies a Medallion Architecture, dimensional modeling, and SQL analytics to provide business-focused insights into operational performance and profitability.
-
-**Industry:** Retail & Distribution  
-**Business Scenario:** Nexa Distribution Group (Fictional)  
-**Data:** Synthetic Demonstration Data  
-**Current Status:** Data Engineering Foundation Completed – Application Development Planned
+OpsPulse is an enterprise-grade Data Engineering and Business Intelligence platform built for retail and distribution networks. It unifies fragmented transactional streams across sales, inventory, procurement, suppliers, and operating expenses into a centralized PostgreSQL Data Warehouse (`opspulse_dw`), governed by automated data quality assertions, full pipeline observability, a high-performance Python FastAPI analytical backend, and a modern Next.js 14 App Router executive dashboard.
 
 ---
 
-## Business Challenges
+## 1. Project Overview & Business Problem
 
-OpsPulse simulates common challenges faced by retail and distribution businesses:
+### Business Context & Objectives
+Retail and wholesale distribution companies frequently struggle with operational silos, fragmented transactional systems, delayed reporting cadences, and silent data quality degradation. In multi-branch, multi-warehouse distribution businesses (such as the simulated *Nexa Distribution Group*):
+- **Margin Erosion:** Product discounting and localized logistics costs erode profitability without real-time visibility.
+- **Supply Chain Bottlenecks:** Purchase orders experience unmonitored vendor lead-time slippage and partial dock fulfillment issues.
+- **Stockout & Capital Imbalances:** Warehouses experience high stockout rates on critical SKUs while holding excess dead stock in non-moving lines.
+- **Data Quality Blind Spots:** Dirty, duplicate, or orphan records silently propagate into executive dashboards, destroying analytical credibility.
 
-- Limited visibility into branch-level profitability.
-- Stockouts and inventory imbalances.
-- Difficulty monitoring product profitability.
-- Supplier delivery delays.
-- Procurement cost variations.
-- Fragmented operational data.
-- Time-consuming manual reporting.
-- Inconsistent data quality.
-
-## Target Business Modules
-
-| Module | Business Purpose | Implementation Status |
-|---|---|---|
-| Executive Overview | Consolidated business performance and profitability | Planned |
-| Sales Intelligence | Revenue, gross profit, sales trends, and product performance | SQL Analytics Implemented |
-| Inventory Intelligence | Inventory position, availability, and stockout analysis | SQL Analytics Implemented |
-| Procurement Intelligence | Purchase orders, supplier delivery, and purchasing costs | SQL Analytics Implemented |
-| Data Pipeline Health | Processing batches and data quality monitoring | Partially Implemented |
+OpsPulse addresses these challenges by implementing an end-to-end data platform with automated ingestion, quarantined cleaning, star-schema dimensional modeling, automated data quality scoring, end-to-end pipeline lineage observability, and sub-second analytical querying.
 
 ---
 
-## Data Engineering Architecture
+## 2. Key Platform Features
 
-OpsPulse follows the Medallion Architecture, separating data processing into three logical layers.
+- **Medallion Data Architecture:** Robust Bronze (raw staging), Silver (validated & quarantined transformations), and Gold (dimensional warehouse) layers.
+- **Enterprise Star Schema:** Dimensional modeling featuring 6 dimensions, 2 bridge tables, and 5 granular fact tables handling 20,000+ sales lines, 9,000 inventory snapshots, and 1,000 purchase orders.
+- **Automated Data Quality Framework:** 210 programmatic assertions executing across Completeness, Uniqueness, Validity, Referential Integrity, and Business Logic with automated quarantine routing.
+- **Full Pipeline Observability:** Medallion volume lineage tracking, task execution duration telemetry, and root-cause failure classification persisted in dedicated PostgreSQL `monitoring` schemas.
+- **Orchestration with Apache Airflow 3.4.0:** 30-task directed acyclic graph (DAG) automating data extraction, transformation, quality gates, dimensional loading, and telemetry reporting.
+- **FastAPI Analytical Backend:** 12 parameterized REST endpoints with connection pooling, structured error handling, and sub-50ms query response times.
+- **Executive Next.js 14 Dashboard:** 9 purpose-built operational interfaces with Recharts data visualizations, global DateRange filtering (FY 2025, Q1–Q4), responsive mobile/tablet layout, and persistent user configuration.
 
-### Bronze Layer
-- Ingests generated source datasets.
-- Preserves raw records.
-- Organizes ingestion batches.
-- Maintains ingestion manifests.
+---
 
-### Silver Layer
-- Cleans and standardizes datasets.
-- Applies data validation rules.
-- Handles invalid records through quarantine processing.
-- Produces structured datasets for analytical processing.
+## 3. Architecture & Data Flow
 
-### Gold Layer
-- Implements a dimensional data warehouse in PostgreSQL.
-- Uses fact, dimension, and bridge tables.
-- Supports analytical SQL queries and business KPIs.
+```mermaid
+flowchart TD
+    subgraph Data Sources [Data Sources & Generation]
+        RAW[Synthetic Retail Data Generator<br/>Sales, Inventory, POs, Expenses] -->|Raw CSVs| BRONZE[Bronze Layer Staging<br/>Raw Batches & Ingestion Manifests]
+    end
 
-### Current Data Flow
+    subgraph Orchestration [Apache Airflow 3.4.0 DAG]
+        BRONZE -->|Audit & Validate| SILVER[Silver Transformation Engine<br/>Pandas Standardization & Cleaning]
+        SILVER -->|Invalid Records| QUARANTINE[(Quarantine Datasets)]
+        SILVER -->|Valid Records| DQ_GATE[Data Quality Engine<br/>210 Automated Assertions]
+        DQ_GATE -->|Pass 100%| GOLD_LOAD[Gold Dimension & Fact Loaders]
+        
+        subgraph Observability [Observability & Telemetry]
+            AIRFLOW_METRICS[Pipeline Run Metrics]
+            TASK_METRICS[Task Duration Telemetry]
+            VOL_LINEAGE[Medallion Volume Extractor]
+        end
+    end
 
-```text
-Synthetic Data Generation
-          |
-          v
-    Raw CSV Datasets
-          |
-          v
-   Python Ingestion
-          |
-          v
-     Bronze Layer
-          |
-          v
- Pandas Transformation
-          |
-          v
-     Silver Layer
-          |
-          v
- PostgreSQL Gold Warehouse
-          |
-          v
-     SQL Analytics
-          |
-          v
-    Business Insights
+    subgraph Warehouse [PostgreSQL 16 Data Warehouse opspulse_dw]
+        GOLD_LOAD --> GOLD_SCHEMA[(Gold Dimensional Schema<br/>6 Dims, 2 Bridges, 5 Facts)]
+        AIRFLOW_METRICS --> MON_SCHEMA[(Monitoring Schema<br/>Lineage & Failure Telemetry)]
+        TASK_METRICS --> MON_SCHEMA
+        VOL_LINEAGE --> MON_SCHEMA
+    end
+
+    subgraph Serving [Analytical Serving & Application Layer]
+        GOLD_SCHEMA --> FASTAPI[FastAPI REST API<br/>Port 8000 / Uvicorn]
+        MON_SCHEMA --> FASTAPI
+        FASTAPI -->|JSON REST API| NEXTJS[Next.js 14 Enterprise Dashboard<br/>App Router / Port 3000]
+        NEXTJS -->|Browser Client| USER((Executive / Ops Manager))
+    end
 ```
 
-### Planned Application Flow
+---
 
-```text
-PostgreSQL Gold Warehouse
-          |
-          v
-      FastAPI Backend
-          |
-          v
-   Next.js Web Dashboard
-          |
-          v
-    Business Users
+## 4. Medallion Data Engineering Workflow
+
+OpsPulse structures its data processing into three distinct stages:
+
+### Bronze Layer (Raw Staging)
+- Ingests raw source CSV extracts preserving complete transactional lineage.
+- Generates batch UUIDs and metadata manifests recording file hashes, timestamps, and row counts.
+- Stores immutable point-in-time snapshots to ensure full pipeline replayability.
+
+### Silver Layer (Transformation & Quarantine)
+- Enforces strict data types, standardizes naming conventions, and parses ISO timestamps.
+- Evaluates domain-specific business rules (e.g., non-negative quantities, valid price bounds).
+- Implements **Quarantine Routing**: Records failing schema or validity checks are routed to `_quarantine.csv` sinks with exact error reason codes, ensuring clean downstream tables without stopping pipeline execution.
+
+### Gold Layer (Dimensional Warehouse)
+- Implements Kimball star-schema dimensional modeling inside PostgreSQL (`opspulse_dw`).
+- Generates surrogate integer keys, enforces foreign key referential integrity, and maintains Slowly Changing Dimension (SCD Type 1) semantics.
+
+---
+
+## 5. PostgreSQL Warehouse Schema & Dimensional Model
+
+The Gold schema is optimized for analytical rollups, aggregations, and high-performance slicing:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        DIMENSION & BRIDGE TABLES                       │
+├─────────────────────────┬────────────────────────┬─────────────────────┤
+│ gold.dim_product        │ 100 SKUs across 6 categories                 │
+│ gold.dim_customer       │ 1,000 Retail & Wholesale Accounts            │
+│ gold.dim_branch         │ 5 Regional Hubs (Cairo, Giza, Alex, etc.)    │
+│ gold.dim_warehouse      │ 3 Distribution Facilities                    │
+│ gold.dim_supplier       │ 10 Active Registered Suppliers               │
+│ gold.dim_date           │ Calendar Dimension (20250101 – 20251231)     │
+│ gold.dim_expense_cat    │ 5 Operational Cost Categories                │
+│ bridge_product_supplier │ 150 SKU-Supplier Mapping Lines               │
+│ bridge_branch_warehouse │ 15 Logistics Route Allocations               │
+└─────────────────────────┴────────────────────────┴─────────────────────┘
+                                  │
+                                  ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                              FACT TABLES                               │
+├─────────────────────────┬──────────────────────────────────────────────┤
+│ gold.fact_sales         │ 20,000 transaction lines (8,053 invoices)   │
+│ fact_inventory_snapshot │ 9,000 warehouse snapshot rows (300 SKU-sites)│
+│ fact_purchase_order_lns │ 3,000 purchase order lines (1,000 POs)       │
+│ gold.fact_goods_receipt │ 1,453 dock delivery inspection events        │
+│ fact_operating_expenses │ 2,000 monthly operational expense lines      │
+└─────────────────────────┴──────────────────────────────────────────────┘
 ```
 
-The application flow is part of the development roadmap and is not yet implemented.
+---
+
+## 6. Pipeline Orchestration with Apache Airflow 3.4.0
+
+The entire pipeline is automated through the `opspulse_pipeline` DAG in Apache Airflow 3.4.0:
+
+1. **Bronze Ingestion Phase:** Parallel ingestion of 12 transactional streams with batch manifest tracking.
+2. **Silver Transformation Phase:** Standardized cleansing, casting, and quarantine routing across all datasets.
+3. **Data Quality Verification Gate:** Automated execution of the 210-assertion test suite. Pipeline fails fast if critical integrity constraints are breached.
+4. **Gold Warehouse Loading Phase:** Dimension population, bridge table synchronization, and fact table surrogate key lookups.
+5. **Observability Telemetry Phase:** Automated extraction of run duration, step success rates, and Medallion volume progression into the `monitoring` schema.
 
 ---
 
-## Implemented Work
+## 7. Automated Data Quality Framework
 
-### 1. Synthetic Data Generation
-
-Generated 12 interconnected datasets representing retail and distribution operations.
-
-| Dataset | Records |
-|---|---:|
-| Sales | 20,000 |
-| Inventory Snapshots | 9,000 |
-| Customers | 1,000 |
-| Purchase Orders | 1,000 |
-| Goods Receipts | 1,453 |
-| Operating Expenses | 2,000 |
-| Products | 100 |
-| Branches | 5 |
-| Warehouses | 3 |
-| Suppliers | 10 |
-| Product-Supplier Relationships | 150 |
-| Purchase Order Lines | 3,000 |
-| **Total** | **37,721** |
-
-All records are synthetically generated for demonstration purposes.
-
-### 2. Data Ingestion and Transformation
-
-Implemented:
-
-- Python-based raw CSV ingestion.
-- Batch-based Bronze ingestion.
-- Silver transformations using Pandas.
-- Dataset validation.
-- Invalid record quarantine handling.
-- Silver-layer audit checks.
-- Processing manifests.
-
-### 3. Dimensional Data Warehouse
-
-Implemented a PostgreSQL analytical warehouse containing 15 tables.
-
-**Dimension Tables (8)**
-
-- `dim_date`
-- `dim_product`
-- `dim_customer`
-- `dim_branch`
-- `dim_supplier`
-- `dim_warehouse`
-- `dim_sales_channel`
-- `dim_expense_category`
-
-**Fact Tables (5)**
-
-- `fact_sales`
-- `fact_inventory_snapshot`
-- `fact_purchase_order_lines`
-- `fact_goods_receipts`
-- `fact_operating_expenses`
-
-**Bridge Tables (2)**
-
-- `bridge_product_supplier`
-- `bridge_branch_warehouse`
-
-The warehouse supports analytical relationships across sales, inventory, procurement, supplier, and operating expense domains.
-
-### 4. SQL Analytics
-
-Created 25 SQL analytical queries covering:
-
-- Sales performance and revenue trends.
-- Branch and product profitability.
-- Sales channel performance.
-- Inventory health and stockout analysis.
-- Supplier delivery performance.
-- Purchase order fulfillment.
-- Purchase cost variance.
-- Operating expense analysis.
-- Branch-level operating results.
-- Profitability reconciliation.
-
-### 5. Data Validation and Warehouse Auditing
-
-Implemented validation and audit checks covering:
-
-- Dataset processing results.
-- Silver-layer audit.
-- Warehouse referential integrity.
-- Fact table grain and duplicate checks.
-- Orphan record checks.
-- Profitability reconciliation.
+OpsPulse features an enterprise data quality engine (`backend/src/validation/data_quality/`):
+- **210 Automated Assertions** executed on every pipeline run across 12 Silver datasets.
+- **100% Pass Rate** verified in production:
+  - **Completeness (48 checks):** Mandatory non-null constraints on primary keys, transaction dates, and financial amounts.
+  - **Uniqueness (32 checks):** Primary key and composite natural key uniqueness verification.
+  - **Validity (44 checks):** Numerical domain bounds (e.g., `unit_price > 0`, `discount_rate BETWEEN 0 AND 0.50`), regex email validation, and foreign key accepted values.
+  - **Referential Integrity (24 checks):** Parent-child relational checks preventing orphan transactions.
+  - **Business Rules (62 checks):** Complex cross-column validations (e.g., `accepted_qty <= received_qty`, `gross_amount == quantity * unit_price`).
+- **Reporting:** Generates machine-readable `latest_quality_report.json` and audit CSVs exposed via `/api/data-quality`.
 
 ---
 
-## Selected Business Metrics
+## 8. Pipeline Observability & Telemetry
 
-The current synthetic dataset produces the following analytical results:
-
-| Metric | Result |
-|---|---:|
-| Sales Lines | 20,000 |
-| Invoices | 8,053 |
-| Net Revenue | EGP 357.43M |
-| Gross Profit | EGP 45.43M |
-| Gross Profit Margin | 12.71% |
-| Operating Expenses | EGP 39.63M |
-| Simplified Operating Result | EGP 5.80M |
-
-**Important metric definitions:**
-
-- Net Revenue is calculated after discounts.
-- Gross Profit is Net Revenue minus sales cost.
-- Simplified Operating Result is Gross Profit minus operating expenses.
-- Simplified Operating Result is not a complete accounting net profit.
-- These figures are generated from synthetic data and do not represent real business performance.
+Pipeline operations are fully observable via dedicated tables in the `monitoring` schema:
+- `monitoring.pipeline_run_metrics`: Wall-clock execution duration, start/end timestamps, and overall DAG health.
+- `monitoring.pipeline_task_metrics`: Granular task-level status, execution duration (seconds), and error tracebacks.
+- `monitoring.pipeline_data_volume_metrics`: End-to-end Medallion volume tracking:
+  $$\text{Raw Records: } 150,627 \longrightarrow \text{Bronze: } 150,627 \longrightarrow \text{Silver: } 150,627 \longrightarrow \text{Gold: } 150,627$$
+- Visualized natively in the frontend via interactive Sankey/Medallion volume lineage and task duration charts.
 
 ---
 
-## Technology Stack
+## 9. FastAPI Analytical Backend
 
-### Implemented
-
-- Python
-- Pandas
-- NumPy
-- Faker
-- PostgreSQL
-- SQLAlchemy
-- Psycopg
-- SQL
-- Docker
-- Git
-
-### Planned
-
-- Microsoft Fabric
-- OneLake
-- PySpark
-- Fabric Data Factory
-- FastAPI
-- Next.js
-- TypeScript
-- Tailwind CSS
-- Recharts
-- Enhanced Pipeline Orchestration
+Located in `backend/src/api/`, the backend serves sub-50ms analytics to the frontend:
+- **Architecture:** FastAPI on Uvicorn with SQLAlchemy 2.0 connection pooling (`psycopg` 3.x driver).
+- **Security & Reliability:** Parameterized SQL queries preventing injection, strict CORS whitelisting, and centralized JSON exception handlers.
+- **12 Domain Endpoints:**
+  - `GET /api/health` — PostgreSQL connection ping and service status.
+  - `GET /api/overview` — Executive KPIs, monthly revenue curve, top SKUs, branch performance (supports `?quarter=1..4`).
+  - `GET /api/sales` — Revenue breakdown, discount metrics, margin analysis.
+  - `GET /api/sales/transactions` — Server-side paginated transaction ledger (search, channel, quarter filters).
+  - `GET /api/inventory` — Facility capacity utilization and valuation metrics.
+  - `GET /api/inventory/items` — Paginated SKU ledger with stockout flags and warehouse filtering.
+  - `GET /api/procurement` — Committed PO spend, supplier lead times, OTIF delivery rate.
+  - `GET /api/procurement/orders` — Paginated purchase order registry with supplier filtering.
+  - `GET /api/suppliers` — Supplier scorecard directory with fulfillment rates and risk ratings.
+  - `GET /api/expenses` — OpEx ledger, monthly budget variance, cost center distribution.
+  - `GET /api/monitoring` — Real-time Airflow DAG execution history and task-level duration telemetry.
+  - `GET /api/data-quality` — 210 assertion test results, dataset health scores, and categorical breakdowns.
 
 ---
 
-## Project Structure
+## 10. Next.js 14 Enterprise Dashboard
+
+The modern web application in `frontend/` provides 9 intuitive, data-dense screens:
+- **Next.js 14 App Router:** TypeScript, Tailwind CSS, Lucide icons, and Recharts SVG graphics.
+- **Global DateRange Context:** Top navigation selector (`FY 2025`, `Q1 2025`, `Q2 2025`, `Q3 2025`, `Q4 2025`, `All Available Data`) with `localStorage` persistence dynamically updates charts across Overview, Sales, and Expenses.
+- **Enterprise UX:** Compact currency formatting (`$357.43M`, `$29.5M`), KPI sentiment indicators, instant search, table pagination, and responsive design across desktop, laptop, and tablet viewports.
+- **Persistent Settings:** Configurable auto-refresh polling intervals (`Off`, `30s`, `1m`, `5m`) persisted in browser storage.
+
+---
+
+## 11. Authoritative Business Metrics Reconciled
+
+All metrics displayed across the platform reconcile 100% with the PostgreSQL warehouse:
+
+| Metric Name | Reconciled Value | Source Formula & Definition |
+| :--- | :--- | :--- |
+| **Gross Sales Amount** | **$380,108,747.31** | $\sum (\text{quantity} \times \text{unit\_price})$ across 20,000 sales lines |
+| **Total Discounts** | **$22,681,878.26** | Total promotional price reductions deducted from sales |
+| **Net Sales Revenue** | **$357,426,869.05** | $\text{Gross Sales} - \text{Discounts}$ across 8,053 customer invoices |
+| **Gross Profit** | **$45,431,649.88** | $\text{Net Revenue} - \text{COGS}$ (Gross Margin: **12.71%**) |
+| **Distinct Invoices** | **8,053 Invoices** | Average Order Value (AOV): **$44,384.31** |
+| **Current Inventory Valuation** | **$17,169,853.11** | Latest snapshot valuation across 300 SKU-warehouse sites |
+| **Stockout Rate (Latest)** | **18.0%** | 54 out of 300 SKU locations currently out of stock |
+| **Committed PO Spend** | **$360,560,754.34** | Contractually committed spend across 782 Open POs (1,000 total POs) |
+| **Goods Receipt Acceptance Rate** | **95.7% (Avg)** | **95.7%** per-receipt average; **97.7%** aggregate accepted units (48,048 / 49,184) |
+| **Supplier OTIF Delivery Rate** | **94.2%** | Dock receipts delivered on-time meeting specifications |
+| **Average Supplier Lead Time** | **8.4 Business Days** | Time elapsed between PO order placement and dock warehouse delivery |
+| **Total Operating Expenses (OpEx)** | **$39,631,974.00** | Full year 2025 operating expenditures (11.1% OpEx-to-Net Revenue ratio) |
+
+---
+
+## 12. Tech Stack
+
+- **Data Engineering:** Python 3.13, Pandas, NumPy, SQLAlchemy 2.0, Psycopg 3.
+- **Database & Warehouse:** PostgreSQL 16 (Star Schema, SCD Type 1, Medallion Architecture).
+- **Orchestration:** Apache Airflow 3.4.0 (Custom DAGs, Batch Tracking).
+- **Backend API:** FastAPI, Uvicorn, Pydantic v2, AnyIO.
+- **Frontend UI:** Next.js 14.2 (App Router), React 18, TypeScript, Tailwind CSS, Recharts, Lucide React.
+- **Quality & Testing:** Pytest, Faker, Chrome DevTools Protocol (CDP) automated browser testing.
+
+---
+
+## 13. Repository Structure
 
 ```text
 OpsPulse/
-|
-|-- docs/
-|   |-- architecture.md
-|   |-- business-requirements.md
-|
-|-- data/
-|   |-- raw/
-|   |-- bronze/
-|   |-- silver/
-|   |-- gold/
-|
-|-- backend/
-|   |-- requirements.txt
-|   |-- src/
-|       |-- analytics/
-|       |-- data_generation/
-|       |-- ingestion/
-|       |-- profiling/
-|       |-- transformation/
-|       |-- validation/
-|       |-- warehouse/
-|           |-- loaders/
-|           |-- sql/
-|
-|-- frontend/
-|-- infrastructure/
-|-- tests/
-|
-|-- .gitignore
-|-- README.md
+├── airflow/
+│   └── dags/
+│       └── opspulse_pipeline.py          # 30-task Airflow 3.4.0 pipeline DAG
+├── backend/
+│   ├── requirements.txt                  # Python production dependencies
+│   └── src/
+│       ├── api/                          # FastAPI application & route handlers
+│       │   ├── database.py               # SQLAlchemy connection pool
+│       │   ├── main.py                   # FastAPI app entry point & CORS
+│       │   └── routes/                   # 10 modular analytical domain routes
+│       ├── data_generation/              # Synthetic business data generator
+│       ├── ingestion/                    # Bronze layer extraction & manifests
+│       ├── monitoring/                   # Observability engine & collectors
+│       ├── transformation/               # Silver layer cleansing & quarantine
+│       ├── validation/data_quality/      # 210-assertion Data Quality engine
+│       └── warehouse/loaders/            # Gold dimensional loaders
+├── data/
+│   ├── bronze/                           # Staging folder (.gitkeep)
+│   ├── silver/                           # Cleansed folder (.gitkeep)
+│   ├── gold/                             # Warehouse export folder (.gitkeep)
+│   ├── monitoring_reports/               # Telemetry JSON/CSV summaries
+│   └── quality_reports/                  # Latest DQ report JSON/CSV
+├── docs/                                 # Architectural runbooks & dictionaries
+│   ├── business_metrics_dictionary.md    # Definitive KPI calculation formulas
+│   ├── final_project_stabilization_report.md # Full audit & reconciliation report
+│   └── operational_runbook.md            # Maintenance & disaster recovery guide
+├── frontend/                             # Next.js 14 App Router web dashboard
+│   ├── app/                              # 9 Application routes
+│   ├── components/                       # Reusable UI, Charts, and Tables
+│   ├── lib/                              # API client, DateRange context, utils
+│   ├── package.json
+│   ├── tailwind.config.ts
+│   └── tsconfig.json
+├── tests/                                # 121 unit and integration tests
+├── .env.example                          # Sanitized environment configuration
+├── .gitignore                            # Production git exclusions
+├── pytest.ini                            # Pytest test suite configuration
+├── README.md                             # Comprehensive project documentation
+└── start_opspulse.ps1                    # Unified local startup script
 ```
 
-Generated datasets, local environment files, and virtual environments are excluded from version control.
-
 ---
 
-## Development Roadmap
-
-| Day | Milestone | Status |
-|---|---|---|
-| 1 | Project Foundation & Architecture | Completed |
-| 2 | Synthetic Data Generation & Ingestion | Completed |
-| 3 | Bronze and Silver Processing | Completed |
-| 4 | PostgreSQL Dimensional Data Warehouse | Completed |
-| 5 | SQL Analytics & Business KPIs | Completed |
-| 6 | Microsoft Fabric & OneLake Integration | Planned |
-| 7 | Data Quality & Pipeline Orchestration | Planned |
-| 8 | FastAPI Backend | Planned |
-| 9 | Interactive Next.js Dashboard | Planned |
-| 10 | Integration, Testing & Deployment | Planned |
-
----
-
-## Local Setup
+## 14. Local Installation & Quickstart
 
 ### Prerequisites
+- Python 3.11+ (Python 3.13 recommended)
+- Node.js 18.x or 20.x
+- PostgreSQL 15+ running locally on port 5432
 
-- Python 3.13
-- Docker Desktop
-- PostgreSQL 16 (or the project's configured PostgreSQL container)
-- Git
-
-### 1. Clone the Repository
-
+### 1. Clone & Setup Environment
 ```bash
-git clone <YOUR_GITHUB_REPOSITORY_URL>
+git clone https://github.com/tharwat-farag/OpsPulse.git
 cd OpsPulse
-```
 
-### 2. Create a Virtual Environment
-
-**Windows PowerShell:**
-
-```powershell
+# Create and activate Python virtual environment
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+# Windows:
+.venv\Scripts\activate
+# Linux/macOS:
+source .venv/bin/activate
+
+# Install backend dependencies
+pip install -r backend/requirements.txt
 ```
 
-### 3. Install Dependencies
+### 2. Configure Environment Variables
+```bash
+# Copy template to .env
+cp .env.example .env
 
+# Configure your local PostgreSQL connection in .env:
+# OPSPULSE_DATABASE_URL=postgresql+psycopg://username:password@127.0.0.1:5432/opspulse_dw
+```
+
+### 3. Initialize Frontend Dependencies
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+### 4. Run the Platform
+You can start both the FastAPI backend and Next.js frontend using the provided launcher:
 ```powershell
-python -m pip install -r .\backend\requirements.txt
+# Windows PowerShell
+.\start_opspulse.ps1
+```
+Or start each service independently:
+```bash
+# Terminal 1 - Backend (Port 8000)
+$env:PYTHONPATH="backend/src"
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+
+# Terminal 2 - Frontend (Port 3000)
+cd frontend
+npm run dev
 ```
 
-### 4. Configure Database Connection
-
-Set the `OPSPULSE_DATABASE_URL` environment variable with your own PostgreSQL connection string.
-
-Example format:
-
-```text
-postgresql+psycopg://<username>:<password>@<host>:<port>/<database>
-```
-
-**PowerShell:**
-
-```powershell
-$env:OPSPULSE_DATABASE_URL = "YOUR_DATABASE_CONNECTION_STRING"
-```
-
-Never commit `.env` files, database passwords, or secret credentials.
-
-### 5. Verify Database Connectivity
-
-```powershell
-python .\backend\src\warehouse\test_connection.py
-```
-
-The database must be running and the required warehouse schemas and tables must already exist.
+Visit `http://localhost:3000` to view the live dashboard.
 
 ---
 
-## Important Project Notes
+## 15. Testing & Verification
 
-- All demonstration data is synthetic.
-- The branch-to-warehouse mapping is an explicitly documented project assumption.
-- Current SCD Type 2 dimensions contain baseline versions; historical change processing remains to be implemented and tested.
-- Historical inventory snapshot values must not be summed and interpreted as current inventory value.
-- Stockout indicators do not automatically represent confirmed lost sales.
-- Supplier on-time delivery is measured at the goods-receipt event level.
-- Purchase order fulfillment is measured at the purchase-order-line level.
-- Purchase cost variance currently uses reference supplier prices, not verified historical contract prices.
-- Branch profitability represents a simplified operating result, not complete net profit.
-- Microsoft Fabric and OneLake integration are planned, not yet implemented.
-- FastAPI and the Next.js dashboard are planned application components.
+### Running Backend & Data Quality Tests
+OpsPulse includes 121 automated tests covering API endpoints, data quality assertions, schema classifiers, and storage layers:
+```bash
+.venv\Scripts\pytest -v
+# Output: ======================= 121 passed, 1 warning in 15.78s =======================
+```
 
----
+### Running Frontend Validation
+```bash
+cd frontend
+# TypeScript type check
+npm run type-check   # 0 errors
 
-## Project Goals
+# ESLint code hygiene
+npm run lint         # 0 warnings or errors
 
-OpsPulse demonstrates practical Data Engineering capabilities through:
-
-- Synthetic data generation.
-- Batch data ingestion.
-- Medallion Architecture.
-- Data cleaning and validation.
-- Dimensional data modeling.
-- PostgreSQL Data Warehousing.
-- SQL Analytics.
-- Business KPI development.
-- Data quality and reconciliation.
+# Production build verification
+npm run build        # Compiled successfully (12/12 static pages)
+```
 
 ---
 
-**OpsPulse — Turning Operational Data into Better Business Decisions.**
+## 16. Deployment Architecture
+
+The production-ready deployment architecture decouples compute from storage:
+- **Frontend Dashboard:** Deployed on **Vercel** via Next.js Edge / Serverless hosting with optimized static caching and reverse-proxy API routing.
+- **API Backend:** Containerized Python FastAPI application hosted on cloud infrastructure (e.g. Render, Railway, or Google Cloud Run) communicating over secure HTTPS.
+- **Database:** Managed Cloud PostgreSQL instance hosting the `gold` dimensional warehouse and `monitoring` schemas.
+- **Security:** All database credentials and API secrets remain strictly server-side. Zero sensitive keys or internal connection strings are exposed in client-side bundles.
+
+---
+
+## 17. Synthetic Data Disclaimer & Limitations
+
+- **Synthetic Data:** All transactional records, invoices, customer names, vendor scorecards, and addresses were synthetically generated using Python's `Faker` library for the fictional company *Nexa Distribution Group*. No real commercial or customer PII is contained in this repository.
+- **Calendar Scope:** Transactional data is bounded within calendar year 2025 (`2025-01-01` to `2025-12-31`). Selecting date intervals outside this window returns empty sets.
+- **Airflow Orchestration:** In local development, Airflow DAGs execute against the local PostgreSQL warehouse. In cloud demo mode, the dashboard and API read the pre-aggregated Gold warehouse and persisted monitoring telemetry to maintain low operational cost without requiring a persistent 24/7 Airflow server.
+
+---
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

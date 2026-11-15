@@ -1,17 +1,17 @@
 
+import argparse
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-sys.path.insert(
-    0,
-    str(PROJECT_ROOT / "backend" / "src" / "data_generation")
-)
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 BRONZE_DIR = PROJECT_ROOT / "data" / "bronze"
 SILVER_DIR = PROJECT_ROOT / "data" / "silver"
@@ -26,30 +26,26 @@ REQUIRED_COLUMNS = [
 ]
 
 
-def find_latest_batch():
-    batches = [
-        path for path in BRONZE_DIR.iterdir()
-        if path.is_dir()
-        and (path / "ingestion_manifest.json").exists()
-    ]
+# =========================================================
+# LOAD REFERENCE DATA
+# =========================================================
 
-    if not batches:
-        raise FileNotFoundError("No Bronze batch found.")
+def load_reference_data(batch_id):
 
-    return max(batches, key=lambda path: path.stat().st_mtime)
-
-
-def load_reference_data(batch_dir):
-    silver_batch = SILVER_DIR / batch_dir.name
+    silver_batch = SILVER_DIR / batch_id
 
     products_path = silver_batch / "products.csv"
     warehouses_path = silver_batch / "warehouses.csv"
 
     if not products_path.exists():
-        raise FileNotFoundError(f"Missing Products Silver file: {products_path}")
+        raise FileNotFoundError(
+            f"Missing Products Silver file: {products_path}"
+        )
 
     if not warehouses_path.exists():
-        raise FileNotFoundError(f"Missing Warehouses Silver file: {warehouses_path}")
+        raise FileNotFoundError(
+            f"Missing Warehouses Silver file: {warehouses_path}"
+        )
 
     products = pd.read_csv(products_path)
     warehouses = pd.read_csv(warehouses_path)
@@ -57,16 +53,28 @@ def load_reference_data(batch_dir):
     return products, warehouses
 
 
+# =========================================================
+# LOAD INVENTORY
+# =========================================================
+
 def load_inventory(batch_dir):
+
     path = batch_dir / "inventory.csv"
 
     if not path.exists():
-        raise FileNotFoundError(f"Missing inventory file: {path}")
+        raise FileNotFoundError(
+            f"Missing inventory file: {path}"
+        )
 
     return pd.read_csv(path)
 
 
+# =========================================================
+# DATA STANDARDIZATION
+# =========================================================
+
 def standardize_data(df):
+
     df = df.copy()
 
     text_columns = [
@@ -76,6 +84,7 @@ def standardize_data(df):
     ]
 
     for column in text_columns:
+
         df[column] = (
             df[column]
             .astype("string")
@@ -94,6 +103,7 @@ def standardize_data(df):
     ]
 
     for column in numeric_columns:
+
         df[column] = pd.to_numeric(
             df[column],
             errors="coerce"
@@ -102,27 +112,52 @@ def standardize_data(df):
     return df
 
 
+# =========================================================
+# DATA QUALITY VALIDATION
+# =========================================================
+
 def validate_data(df, products, warehouses):
+
     df = df.copy()
 
-    reasons = pd.Series("", index=df.index, dtype="string")
+    reasons = pd.Series(
+        "",
+        index=df.index,
+        dtype="string"
+    )
 
     def add_reason(mask, message):
+
         nonlocal reasons
+
         reasons.loc[mask] = (
-            reasons.loc[mask] + message + "; "
+            reasons.loc[mask]
+            + message
+            + "; "
         )
 
     # Required fields
-    missing_mask = df[REQUIRED_COLUMNS].isna().any(axis=1)
-    add_reason(missing_mask, "Missing or invalid required field")
+    missing_mask = (
+        df[REQUIRED_COLUMNS]
+        .isna()
+        .any(axis=1)
+    )
+
+    add_reason(
+        missing_mask,
+        "Missing or invalid required field"
+    )
 
     # Primary key
     duplicate_ids = (
         df["inventory_snapshot_id"].notna()
         & df["inventory_snapshot_id"].duplicated(keep=False)
     )
-    add_reason(duplicate_ids, "Duplicate inventory_snapshot_id")
+
+    add_reason(
+        duplicate_ids,
+        "Duplicate inventory_snapshot_id"
+    )
 
     # Composite grain
     duplicate_grain = (
@@ -138,6 +173,7 @@ def validate_data(df, products, warehouses):
             keep=False,
         )
     )
+
     add_reason(
         duplicate_grain,
         "Duplicate product-warehouse-snapshot_date combination"
@@ -157,7 +193,11 @@ def validate_data(df, products, warehouses):
     )
 
     # Quantities must be non-negative integers
-    for column in ["quantity_on_hand", "quantity_reserved"]:
+    for column in [
+        "quantity_on_hand",
+        "quantity_reserved"
+    ]:
+
         invalid_quantity = (
             df[column].notna()
             & (
@@ -165,16 +205,19 @@ def validate_data(df, products, warehouses):
                 | (df[column] % 1 != 0)
             )
         )
+
         add_reason(
             invalid_quantity,
             f"{column} must be a non-negative integer"
         )
 
-    # Business rule: reserved cannot exceed on-hand
-    # We retain these as operational exceptions, not quarantine.
+    # Reserved exceeding on-hand remains an operational exception.
+    # It is intentionally not quarantined.
+
     valid_mask = reasons.eq("")
 
     valid_df = df.loc[valid_mask].copy()
+
     quarantine_df = df.loc[~valid_mask].copy()
 
     quarantine_df["rejection_reason"] = (
@@ -184,11 +227,16 @@ def validate_data(df, products, warehouses):
     return valid_df, quarantine_df
 
 
+# =========================================================
+# BUSINESS TRANSFORMATIONS
+# =========================================================
+
 def apply_business_transformations(
     df,
     products,
     warehouses
 ):
+
     df = df.copy()
 
     # Add product standard cost
@@ -231,7 +279,9 @@ def apply_business_transformations(
     )
 
     # Inventory indicators
-    df["is_stockout"] = df["quantity_on_hand"].eq(0)
+    df["is_stockout"] = (
+        df["quantity_on_hand"].eq(0)
+    )
 
     df["is_fully_reserved"] = (
         df["available_quantity"].eq(0)
@@ -278,7 +328,7 @@ def apply_business_transformations(
         * 100
     )
 
-    # Merge the same warehouse/date utilization onto each product row.
+    # Merge utilization onto each product row.
     df = df.merge(
         warehouse_daily[
             [
@@ -296,8 +346,14 @@ def apply_business_transformations(
     return df
 
 
+# =========================================================
+# SILVER VALIDATION
+# =========================================================
+
 def validate_silver(df):
+
     assert df["inventory_snapshot_id"].is_unique
+
     assert not df.duplicated(
         subset=[
             "product_id",
@@ -309,6 +365,7 @@ def validate_silver(df):
     assert df[REQUIRED_COLUMNS].notna().all().all()
 
     assert (df["quantity_on_hand"] >= 0).all()
+
     assert (df["quantity_reserved"] >= 0).all()
 
     assert (
@@ -326,23 +383,48 @@ def validate_silver(df):
     print("All Silver validation checks passed.")
 
 
-def save_outputs(valid_df, quarantine_df, source_batch):
-    silver_batch_dir = SILVER_DIR / source_batch.name
-    silver_batch_dir.mkdir(parents=True, exist_ok=True)
+# =========================================================
+# SAVE SILVER OUTPUTS
+# =========================================================
 
-    valid_path = silver_batch_dir / "inventory.csv"
-    quarantine_path = silver_batch_dir / "inventory_quarantine.csv"
+def save_outputs(
+    valid_df,
+    quarantine_df,
+    batch_id
+):
 
-    manifest_path = (
-        silver_batch_dir / "inventory_transformation_manifest.json"
+    silver_batch_dir = SILVER_DIR / batch_id
+
+    silver_batch_dir.mkdir(
+        parents=True,
+        exist_ok=True
     )
 
-    valid_df.to_csv(valid_path, index=False)
-    quarantine_df.to_csv(quarantine_path, index=False)
+    valid_path = silver_batch_dir / "inventory.csv"
+
+    quarantine_path = (
+        silver_batch_dir / "inventory_quarantine.csv"
+    )
+
+    manifest_path = (
+        silver_batch_dir
+        / "inventory_transformation_manifest.json"
+    )
+
+    valid_df.to_csv(
+        valid_path,
+        index=False
+    )
+
+    quarantine_df.to_csv(
+        quarantine_path,
+        index=False
+    )
 
     manifest = {
         "dataset": "inventory",
-        "source_batch": source_batch.name,
+        "batch_id": batch_id,
+        "source_batch": batch_id,
         "transformation_timestamp": datetime.now(
             timezone.utc
         ).isoformat(),
@@ -353,9 +435,15 @@ def save_outputs(valid_df, quarantine_df, source_batch):
         "output_file": valid_path.name,
         "quarantine_file": quarantine_path.name,
         "business_rules": {
-            "available_quantity": "quantity_on_hand - quantity_reserved",
-            "total_inventory_value": "quantity_on_hand * standard_cost",
-            "available_inventory_value": "available_quantity * standard_cost",
+            "available_quantity": (
+                "quantity_on_hand - quantity_reserved"
+            ),
+            "total_inventory_value": (
+                "quantity_on_hand * standard_cost"
+            ),
+            "available_inventory_value": (
+                "available_quantity * standard_cost"
+            ),
             "capacity_utilization": (
                 "warehouse total on-hand / warehouse capacity * 100"
             ),
@@ -365,63 +453,172 @@ def save_outputs(valid_df, quarantine_df, source_batch):
         },
     }
 
-    with open(manifest_path, "w", encoding="utf-8") as file:
-        json.dump(manifest, file, indent=4)
+    with open(
+        manifest_path,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(
+            manifest,
+            file,
+            indent=4
+        )
 
     return manifest
 
 
-def main():
-    print("Starting Inventory Bronze-to-Silver Transformation...")
+# =========================================================
+# MAIN PIPELINE
+# =========================================================
 
-    source_batch = find_latest_batch()
-    print(f"Source batch: {source_batch.name}")
+def main(batch_id: str) -> dict:
 
+    if not batch_id or not batch_id.strip():
+        raise ValueError("batch_id must be provided.")
+
+    batch_id = batch_id.strip()
+
+    if Path(batch_id).name != batch_id:
+        raise ValueError("Invalid batch_id.")
+
+    print("=" * 55)
+    print("BRONZE TO SILVER: INVENTORY TRANSFORMATION")
+    print("=" * 55)
+
+    # Resolve exact Bronze batch
+    source_batch = BRONZE_DIR / batch_id
+
+    if not source_batch.is_dir():
+        raise FileNotFoundError(
+            f"Bronze batch directory not found: {source_batch}"
+        )
+
+    # Validate ingestion manifest
+    ingestion_manifest_path = (
+        source_batch / "ingestion_manifest.json"
+    )
+
+    if not ingestion_manifest_path.exists():
+        raise FileNotFoundError(
+            f"Ingestion manifest not found: {ingestion_manifest_path}"
+        )
+
+    with open(
+        ingestion_manifest_path,
+        "r",
+        encoding="utf-8"
+    ) as file:
+
+        ingestion_manifest = json.load(file)
+
+    if ingestion_manifest.get("batch_id") != batch_id:
+        raise ValueError(
+            "Ingestion manifest batch_id does not match requested batch_id."
+        )
+
+    print(f"Source batch: {batch_id}")
+
+    # Load source and reference data
     raw_df = load_inventory(source_batch)
-    products, warehouses = load_reference_data(source_batch)
 
-    print(f"Input records: {len(raw_df)}")
+    products, warehouses = load_reference_data(batch_id)
 
+    missing_columns = [
+        column
+        for column in REQUIRED_COLUMNS
+        if column not in raw_df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing required inventory columns: {missing_columns}"
+        )
+
+    required_product_columns = [
+        "product_id",
+        "standard_cost"
+    ]
+
+    missing_product_columns = [
+        column
+        for column in required_product_columns
+        if column not in products.columns
+    ]
+
+    if missing_product_columns:
+        raise ValueError(
+            f"Missing product reference columns: {missing_product_columns}"
+        )
+
+    required_warehouse_columns = [
+        "warehouse_id",
+        "capacity_units"
+    ]
+
+    missing_warehouse_columns = [
+        column
+        for column in required_warehouse_columns
+        if column not in warehouses.columns
+    ]
+
+    if missing_warehouse_columns:
+        raise ValueError(
+            f"Missing warehouse reference columns: {missing_warehouse_columns}"
+        )
+
+    input_count = len(raw_df)
+
+    print(f"Input records: {input_count}")
+
+    # Standardization
     df = standardize_data(raw_df)
 
+    # Data quality validation
     valid_df, quarantine_df = validate_data(
         df,
         products,
         warehouses
     )
 
+    # Business transformations
     silver_df = apply_business_transformations(
         valid_df,
         products,
         warehouses
     )
 
+    # Silver validation
     validate_silver(silver_df)
 
+    # Save outputs
     manifest = save_outputs(
         silver_df,
         quarantine_df,
-        source_batch
+        batch_id
     )
 
+    # Summary
     print("\n=== TRANSFORMATION SUMMARY ===")
+
+    print(f"Batch ID: {batch_id}")
     print(f"Input Records: {manifest['input_records']}")
     print(f"Silver Records: {manifest['silver_records']}")
     print(f"Quarantined Records: {manifest['quarantined_records']}")
 
     print(
         "Stockout Records:",
-        silver_df["is_stockout"].sum()
+        int(silver_df["is_stockout"].sum())
     )
 
     print(
         "Fully Reserved Records:",
-        silver_df["is_fully_reserved"].sum()
+        int(silver_df["is_fully_reserved"].sum())
     )
 
     print(
         "Reserved Exceeds On-Hand:",
-        silver_df["is_reserved_exceeds_on_hand"].sum()
+        int(silver_df["is_reserved_exceeds_on_hand"].sum())
     )
 
     print(
@@ -435,6 +632,7 @@ def main():
     )
 
     print("\nAverage Capacity Utilization by Warehouse:")
+
     print(
         silver_df.groupby("warehouse_id")[
             "capacity_utilization_pct"
@@ -443,6 +641,30 @@ def main():
 
     print("\nTransformation completed successfully.")
 
+    return {
+        "batch_id": batch_id,
+        "input_records": input_count,
+        "valid_records": len(silver_df),
+        "quarantined_records": len(quarantine_df),
+        "status": "SUCCESS",
+    }
+
+
+# =========================================================
+# SCRIPT ENTRY POINT
+# =========================================================
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Transform inventory from Bronze to Silver."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        help="The exact Bronze ingestion batch ID to process."
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)

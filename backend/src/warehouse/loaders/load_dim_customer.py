@@ -1,4 +1,5 @@
 
+import argparse
 import csv
 from datetime import date
 from pathlib import Path
@@ -8,17 +9,11 @@ from sqlalchemy import text
 from warehouse.db_connection import get_database_engine
 
 
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-
-BATCH_ID = "batch_20261111_124227_c8e6ab39"
-
-SOURCE_FILE = (
-    PROJECT_ROOT
-    / "data"
-    / "silver"
-    / BATCH_ID
-    / "customers.csv"
-)
 
 BASELINE_DATE = date(2025, 1, 1)
 
@@ -57,21 +52,38 @@ INSERT_CUSTOMER_SQL = text("""
 """)
 
 
-def read_customers():
-    if not SOURCE_FILE.exists():
+# =========================================================
+# 1. READ AND VALIDATE CUSTOMERS
+# =========================================================
+
+def read_customers(batch_id: str) -> list[dict]:
+
+    source_file = (
+        PROJECT_ROOT
+        / "data"
+        / "silver"
+        / batch_id
+        / "customers.csv"
+    )
+
+    if not source_file.exists():
         raise FileNotFoundError(
-            f"Source file not found: {SOURCE_FILE}"
+            f"Source file not found: {source_file}"
         )
 
-    with SOURCE_FILE.open(
+    with source_file.open(
         mode="r",
         encoding="utf-8-sig",
-        newline=""
+        newline="",
     ) as file:
+
         reader = csv.DictReader(file)
 
         source_columns = set(reader.fieldnames or [])
-        missing_columns = REQUIRED_COLUMNS - source_columns
+
+        missing_columns = (
+            REQUIRED_COLUMNS - source_columns
+        )
 
         if missing_columns:
             raise ValueError(
@@ -81,66 +93,141 @@ def read_customers():
         customers = list(reader)
 
     if not customers:
-        raise ValueError("Source file contains no customers.")
-
-    customer_ids = [
-        row["customer_id"].strip()
-        for row in customers
-    ]
-
-    if len(customer_ids) != len(set(customer_ids)):
-        raise ValueError("Duplicate customer_id found in source.")
+        raise ValueError(
+            "Source file contains no customers."
+        )
 
     records = []
+    customer_ids = set()
 
     for row in customers:
+
+        customer_id = row["customer_id"].strip()
+
+        if not customer_id:
+            raise ValueError(
+                "Empty customer_id found."
+            )
+
+        if customer_id in customer_ids:
+            raise ValueError(
+                f"Duplicate customer_id found: {customer_id}"
+            )
+
+        customer_ids.add(customer_id)
+
+        customer_name = row["customer_name"].strip()
         customer_type = row["customer_type"].strip()
+        city = row["city"].strip()
+
+        if not customer_name or not city:
+            raise ValueError(
+                f"Missing customer name or city for {customer_id}."
+            )
 
         if customer_type not in {"Business", "Individual"}:
             raise ValueError(
-                f"Invalid customer type for {row['customer_id']}"
+                f"Invalid customer type for {customer_id}: "
+                f"{customer_type}"
             )
 
-        records.append({
-            "customer_id": row["customer_id"].strip(),
-            "customer_name": row["customer_name"].strip(),
-            "customer_type": customer_type,
-            "city": row["city"].strip(),
-            "registration_date": date.fromisoformat(
+        try:
+            registration_date = date.fromisoformat(
                 row["registration_date"].strip()
-            ),
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid registration_date for {customer_id}."
+            ) from exc
+
+        records.append({
+            "customer_id": customer_id,
+            "customer_name": customer_name,
+            "customer_type": customer_type,
+            "city": city,
+            "registration_date": registration_date,
             "valid_from": BASELINE_DATE,
         })
+
+    print(f"Source records validated: {len(records):,}")
+    print("Customer source validation: PASSED")
 
     return records
 
 
-def main():
-    print("Starting Customer Dimension Initial Load...")
+# =========================================================
+# 2. LOAD CUSTOMER DIMENSION
+# =========================================================
 
-    customers = read_customers()
+def load_customers(customers: list[dict]) -> None:
 
-    print(f"Source records validated: {len(customers)}")
+    print("\nLoading Customer Dimension...")
 
     engine = get_database_engine()
 
-    with engine.begin() as connection:
-        result = connection.execute(
-            INSERT_CUSTOMER_SQL,
-            customers
+    try:
+
+        with engine.begin() as connection:
+
+            result = connection.execute(
+                INSERT_CUSTOMER_SQL,
+                customers,
+            )
+
+            inserted_count = result.rowcount
+
+        skipped_count = len(customers) - inserted_count
+
+        print("\nCustomer Dimension Load Summary")
+        print("--------------------------------")
+        print(f"Source records:   {len(customers):,}")
+        print(f"Inserted records: {inserted_count:,}")
+        print(f"Skipped records:  {skipped_count:,}")
+        print("Load completed successfully.")
+
+    finally:
+        engine.dispose()
+
+
+# =========================================================
+# 3. MAIN EXECUTION
+# =========================================================
+
+def main(batch_id: str) -> None:
+
+    if not batch_id or not batch_id.strip():
+        raise ValueError(
+            "A valid batch_id is required."
         )
 
-        inserted_count = result.rowcount
+    print("=" * 55)
+    print("OPSPULSE - CUSTOMER DIMENSION INITIAL LOAD")
+    print(f"Batch ID: {batch_id}")
+    print("=" * 55)
 
-    skipped_count = len(customers) - inserted_count
+    customers = read_customers(batch_id)
 
-    print("\nCustomer Dimension Load Summary")
-    print("--------------------------------")
-    print(f"Source records:   {len(customers)}")
-    print(f"Inserted records: {inserted_count}")
-    print(f"Skipped records:  {skipped_count}")
-    print("Load completed successfully.")
+    load_customers(customers)
 
+    print("\nCustomer Dimension Initial Load completed.")
+
+
+# =========================================================
+# 4. COMMAND LINE EXECUTION
+# =========================================================
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Load Customer Dimension baseline data."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        type=str,
+        help="Silver batch ID to process.",
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)

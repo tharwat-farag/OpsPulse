@@ -1,7 +1,8 @@
 
-from pathlib import Path
-from datetime import datetime, timezone
+import argparse
 import json
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
@@ -17,40 +18,53 @@ SILVER_DIR = PROJECT_ROOT / "data" / "silver"
 
 
 # =========================================================
-# FIND LATEST BRONZE BATCH
-# =========================================================
-
-def find_latest_batch():
-
-    batches = [
-        path
-        for path in BRONZE_DIR.iterdir()
-        if path.is_dir()
-        and (path / "ingestion_manifest.json").exists()
-    ]
-
-    if not batches:
-        raise FileNotFoundError("No Bronze batch found.")
-
-    return max(
-        batches,
-        key=lambda path: path.stat().st_mtime
-    )
-
-
-# =========================================================
 # MAIN TRANSFORMATION
 # =========================================================
 
-def main():
+def main(batch_id: str) -> dict:
+
+    if not batch_id or not batch_id.strip():
+        raise ValueError("batch_id must be provided.")
+
+    batch_id = batch_id.strip()
+
+    if Path(batch_id).name != batch_id:
+        raise ValueError("Invalid batch_id.")
 
     print("=" * 55)
     print("BRONZE TO SILVER: GOODS RECEIPTS")
     print("=" * 55)
 
-    bronze_batch = find_latest_batch()
+    # Resolve exact Bronze batch
+    bronze_batch = BRONZE_DIR / batch_id
 
-    batch_id = bronze_batch.name
+    if not bronze_batch.is_dir():
+        raise FileNotFoundError(
+            f"Bronze batch directory not found: {bronze_batch}"
+        )
+
+    # Validate ingestion manifest
+    ingestion_manifest_path = (
+        bronze_batch / "ingestion_manifest.json"
+    )
+
+    if not ingestion_manifest_path.exists():
+        raise FileNotFoundError(
+            f"Ingestion manifest not found: {ingestion_manifest_path}"
+        )
+
+    with open(
+        ingestion_manifest_path,
+        "r",
+        encoding="utf-8"
+    ) as file:
+
+        ingestion_manifest = json.load(file)
+
+    if ingestion_manifest.get("batch_id") != batch_id:
+        raise ValueError(
+            "Ingestion manifest batch_id does not match requested batch_id."
+        )
 
     source_path = bronze_batch / "goods_receipts.csv"
 
@@ -66,6 +80,11 @@ def main():
         / "purchase_orders.csv"
     )
 
+    if not source_path.exists():
+        raise FileNotFoundError(
+            f"Bronze goods_receipts not found: {source_path}"
+        )
+
     if not po_lines_path.exists():
         raise FileNotFoundError(
             "Silver purchase_order_lines not found."
@@ -76,6 +95,7 @@ def main():
             "Silver purchase_orders not found."
         )
 
+    # Load source and reference data
     df = pd.read_csv(source_path)
 
     po_lines = pd.read_csv(po_lines_path)
@@ -109,6 +129,38 @@ def main():
     if missing_columns:
         raise ValueError(
             f"Missing columns: {missing_columns}"
+        )
+
+    required_po_line_columns = [
+        "po_line_id",
+        "po_id",
+        "ordered_qty",
+    ]
+
+    missing_po_line_columns = (
+        set(required_po_line_columns) - set(po_lines.columns)
+    )
+
+    if missing_po_line_columns:
+        raise ValueError(
+            "Missing purchase_order_lines columns: "
+            f"{missing_po_line_columns}"
+        )
+
+    required_po_columns = [
+        "po_id",
+        "order_date",
+        "expected_delivery_date",
+    ]
+
+    missing_po_columns = (
+        set(required_po_columns) - set(purchase_orders.columns)
+    )
+
+    if missing_po_columns:
+        raise ValueError(
+            "Missing purchase_orders columns: "
+            f"{missing_po_columns}"
         )
 
     # =====================================================
@@ -446,6 +498,7 @@ def main():
     manifest = {
         "dataset": "goods_receipts",
         "source_batch_id": batch_id,
+        "batch_id": batch_id,
         "transformation_timestamp": (
             datetime.now(timezone.utc).isoformat()
         ),
@@ -510,6 +563,33 @@ def main():
 
     print("\nTransformation completed successfully!")
 
+    return {
+        "batch_id": batch_id,
+        "input_records": input_count,
+        "valid_records": len(valid_df),
+        "quarantined_records": len(quarantine_df),
+        "late_receipts": int(
+            valid_df["is_late_receipt"].sum()
+        ),
+        "status": "SUCCESS",
+    }
+
+
+# =========================================================
+# SCRIPT ENTRY POINT
+# =========================================================
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Transform goods receipts from Bronze to Silver."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        help="The exact Bronze ingestion batch ID to process."
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)

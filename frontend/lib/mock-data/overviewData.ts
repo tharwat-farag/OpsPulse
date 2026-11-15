@@ -1,0 +1,252 @@
+/**
+ * Demo Mock Data: Overview Dashboard
+ * Clearly separated demonstration datasets representing retail & distribution operations.
+ */
+
+import {
+  KpiMetric,
+  RevenueTrendPoint,
+  BranchPerformance,
+  ChannelShare,
+  ProductPerformance,
+  ActivityEvent,
+  PipelineRun,
+} from "@/types";
+
+export const OVERVIEW_KPIS: KpiMetric[] = [
+  {
+    title: "Total Revenue (MTD)",
+    value: "$1,842,950",
+    numericValue: 1842950,
+    changePct: 12.4,
+    isPositive: true,
+    trend: "up",
+    caption: "vs. previous month ($1.64M)",
+    iconName: "DollarSign",
+  },
+  {
+    title: "Gross Profit",
+    value: "$589,740",
+    numericValue: 589740,
+    changePct: 8.7,
+    isPositive: true,
+    trend: "up",
+    caption: "32.0% average gross margin",
+    iconName: "TrendingUp",
+  },
+  {
+    title: "Total Orders",
+    value: "20,000",
+    numericValue: 20000,
+    changePct: 5.2,
+    isPositive: true,
+    trend: "up",
+    caption: "Avg order value $92.15",
+    iconName: "ShoppingBag",
+  },
+  {
+    title: "Inventory Value",
+    value: "$3,412,800",
+    numericValue: 3412800,
+    changePct: -2.1,
+    isPositive: true,
+    trend: "down",
+    caption: "4 distribution warehouses",
+    iconName: "Boxes",
+  },
+  {
+    title: "Stockout Rate",
+    value: "1.8%",
+    numericValue: 1.8,
+    changePct: -0.6,
+    isPositive: true,
+    trend: "down",
+    caption: "Target threshold < 2.5%",
+    iconName: "AlertTriangle",
+  },
+  {
+    title: "Open Purchase Orders",
+    value: "42 POs",
+    numericValue: 42,
+    changePct: 4.8,
+    isPositive: false,
+    trend: "up",
+    caption: "$485k total committed value",
+    iconName: "FileText",
+  },
+];
+
+export const REVENUE_TREND_DATA: RevenueTrendPoint[] = [
+  { date: "Nov 01", revenue: 58200, target: 52000, cost: 38400 },
+  { date: "Nov 03", revenue: 64100, target: 54000, cost: 42100 },
+  { date: "Nov 05", revenue: 59300, target: 55000, cost: 39500 },
+  { date: "Nov 07", revenue: 71200, target: 60000, cost: 47200 },
+  { date: "Nov 09", revenue: 68400, target: 62000, cost: 45100 },
+  { date: "Nov 11", revenue: 78900, target: 65000, cost: 51200 },
+  { date: "Nov 13", revenue: 84300, target: 70000, cost: 54800 },
+  { date: "Nov 15", revenue: 91200, target: 75000, cost: 59300 },
+];
+
+export const BRANCH_PERFORMANCE_DATA: BranchPerformance[] = [
+  {
+    branchId: "BR-01",
+    branchName: "Metropolitan Central",
+    region: "Northeast",
+    revenue: 540200,
+    orders: 5820,
+    targetAchievementPct: 108.4,
+    status: "exceeding",
+  },
+  {
+    branchId: "BR-02",
+    branchName: "Westside Flagship",
+    region: "West Coast",
+    revenue: 462100,
+    orders: 4910,
+    targetAchievementPct: 102.1,
+    status: "on_track",
+  },
+  {
+    branchId: "BR-03",
+    branchName: "Southern Regional Hub",
+    region: "South",
+    revenue: 388400,
+    orders: 4120,
+    targetAchievementPct: 98.6,
+    status: "on_track",
+  },
+  {
+    branchId: "BR-04",
+    branchName: "Midwest Distribution",
+    region: "Midwest",
+    revenue: 298100,
+    orders: 3450,
+    targetAchievementPct: 89.2,
+    status: "underperforming",
+  },
+  {
+    branchId: "BR-05",
+    branchName: "Suburban Retail Depot",
+    region: "Northeast",
+    revenue: 154150,
+    orders: 1700,
+    targetAchievementPct: 96.4,
+    status: "on_track",
+  },
+];
+
+export const SALES_CHANNEL_DATA: ChannelShare[] = [
+  { channel: "Retail Stores", revenue: 884600, percentage: 48, orders: 9600, color: "#2563EB" },
+  { channel: "Online Marketplace", revenue: 534400, percentage: 29, orders: 5800, color: "#06B6D4" },
+  { channel: "Direct Wholesale", revenue: 313300, percentage: 17, orders: 3400, color: "#8B5CF6" },
+  { channel: "Corporate Accounts", revenue: 110650, percentage: 6, orders: 1200, color: "#10B981" },
+];
+
+export const TOP_PRODUCTS_DATA: ProductPerformance[] = [
+  {
+    productId: "PRD-1001",
+    productName: "Industrial Ergonomic Task Chair",
+    sku: "FUR-CH-091",
+    category: "Commercial Furniture",
+    unitsSold: 1420,
+    revenue: 184600,
+    marginPct: 38.5,
+    stockStatus: "in_stock",
+  },
+  {
+    productId: "PRD-1002",
+    productName: "Heavy-Duty Modular Shelving Unit",
+    sku: "WRH-SH-402",
+    category: "Warehouse Logistics",
+    unitsSold: 980,
+    revenue: 147000,
+    marginPct: 41.2,
+    stockStatus: "in_stock",
+  },
+  {
+    productId: "PRD-1003",
+    productName: "Smart Handheld Barcode Scanner 5G",
+    sku: "IT-SC-204",
+    category: "Logistics Tech",
+    unitsSold: 850,
+    revenue: 119000,
+    marginPct: 34.0,
+    stockStatus: "low_stock",
+  },
+  {
+    productId: "PRD-1004",
+    productName: "Eco-Poly Pallet Wrapping Film (Bulk)",
+    sku: "PKG-FL-105",
+    category: "Packaging Supplies",
+    unitsSold: 3200,
+    revenue: 96000,
+    marginPct: 26.8,
+    stockStatus: "in_stock",
+  },
+  {
+    productId: "PRD-1005",
+    productName: "High-Capacity Thermal Label Printer",
+    sku: "IT-PR-331",
+    category: "Logistics Tech",
+    unitsSold: 410,
+    revenue: 82000,
+    marginPct: 36.4,
+    stockStatus: "out_of_stock",
+  },
+];
+
+export const RECENT_ACTIVITIES: ActivityEvent[] = [
+  {
+    id: "act-1",
+    title: "Airflow Pipeline Execution Completed",
+    description: "DAG opspulse_pipeline executed 30/30 tasks successfully in 28.3s.",
+    timestamp: "10 mins ago",
+    type: "pipeline",
+    severity: "success",
+  },
+  {
+    id: "act-2",
+    title: "Automated Data Quality Gate Passed",
+    description: "QualitySuite evaluated 210 checks across 12 Silver datasets. 100% score.",
+    timestamp: "12 mins ago",
+    type: "quality",
+    severity: "success",
+  },
+  {
+    id: "act-3",
+    title: "Low Inventory Warning Triggered",
+    description: "SKU IT-SC-204 dropped below safety threshold (14 units remaining).",
+    timestamp: "45 mins ago",
+    type: "inventory",
+    severity: "warning",
+  },
+  {
+    id: "act-4",
+    title: "Purchase Order #PO-8842 Approved",
+    description: "Transferred to Global Logistics Ltd for $42,500 shipping equipment.",
+    timestamp: "2 hours ago",
+    type: "procurement",
+    severity: "info",
+  },
+  {
+    id: "act-5",
+    title: "Metropolitan Central Surpassed Target",
+    description: "Exceeded weekly sales target by 8.4% ($540k MTD).",
+    timestamp: "4 hours ago",
+    type: "sales",
+    severity: "info",
+  },
+];
+
+export const LATEST_PIPELINE_RUN: PipelineRun = {
+  dagRunId: "manual__2026-11-15T05:05:32.814530+00:00",
+  dagId: "opspulse_pipeline",
+  batchId: "batch_20261115_051056_1d64c5da",
+  status: "success",
+  startTime: "2026-11-15T05:28:21Z",
+  endTime: "2026-11-15T05:28:50Z",
+  durationSeconds: 28.32,
+  tasksTotal: 30,
+  tasksSucceeded: 30,
+  tasksFailed: 0,
+};

@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import argparse
 
 import pandas as pd
 from sqlalchemy import text
@@ -13,21 +14,8 @@ from warehouse.db_connection import get_database_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-BATCH_ID = "batch_20261111_124227_c8e6ab39"
-
-SILVER_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "silver"
-    / BATCH_ID
-)
-
-LINES_FILE = SILVER_DIR / "purchase_order_lines.csv"
-ORDERS_FILE = SILVER_DIR / "purchase_orders.csv"
-
 STAGING_TABLE = "stg_purchase_order_lines"
 CHUNK_SIZE = 1000
-
 
 LINE_COLUMNS = [
     "po_line_id",
@@ -49,27 +37,45 @@ ORDER_COLUMNS = [
 
 
 # =========================================================
+# SOURCE FILE PATHS
+# =========================================================
+
+def get_source_files(batch_id: str) -> tuple[Path, Path]:
+    """Build Silver source file paths using the provided batch ID."""
+
+    if not batch_id or not batch_id.strip():
+        raise ValueError("batch_id must be provided.")
+
+    silver_dir = (
+        PROJECT_ROOT
+        / "data"
+        / "silver"
+        / batch_id
+    )
+
+    return (
+        silver_dir / "purchase_order_lines.csv",
+        silver_dir / "purchase_orders.csv",
+    )
+
+
+# =========================================================
 # 1. READ AND VALIDATE SOURCE FILES
 # =========================================================
 
-def read_source_data():
+def read_source_data(batch_id: str):
+    lines_file, orders_file = get_source_files(batch_id)
 
-    if not LINES_FILE.exists():
-        raise FileNotFoundError(f"Missing file: {LINES_FILE}")
+    if not lines_file.exists():
+        raise FileNotFoundError(f"Missing file: {lines_file}")
 
-    if not ORDERS_FILE.exists():
-        raise FileNotFoundError(f"Missing file: {ORDERS_FILE}")
+    if not orders_file.exists():
+        raise FileNotFoundError(f"Missing file: {orders_file}")
 
-    lines = pd.read_csv(LINES_FILE)
+    lines = pd.read_csv(lines_file)
+    orders = pd.read_csv(orders_file)
 
-    orders = pd.read_csv(
-        ORDERS_FILE,
-        parse_dates=[
-            "order_date",
-            "expected_delivery_date",
-        ],
-    )
-
+    # Validate columns before parsing dates.
     for column in LINE_COLUMNS:
         if column not in lines.columns:
             raise ValueError(f"Missing line column: {column}")
@@ -81,17 +87,34 @@ def read_source_data():
     if lines.empty or orders.empty:
         raise ValueError("Source files cannot be empty.")
 
+    # Parse dates after validating their existence.
+    orders["order_date"] = pd.to_datetime(
+        orders["order_date"],
+        errors="raise",
+    )
+
+    orders["expected_delivery_date"] = pd.to_datetime(
+        orders["expected_delivery_date"],
+        errors="raise",
+    )
+
     if lines[LINE_COLUMNS].isnull().any().any():
-        raise ValueError("Required purchase line values contain NULL.")
+        raise ValueError(
+            "Required purchase line values contain NULL."
+        )
 
     if orders[ORDER_COLUMNS].isnull().any().any():
-        raise ValueError("Required purchase order values contain NULL.")
+        raise ValueError(
+            "Required purchase order values contain NULL."
+        )
 
     if lines["po_line_id"].duplicated().any():
         raise ValueError("Duplicate po_line_id detected.")
 
     if orders["po_id"].duplicated().any():
-        raise ValueError("Duplicate po_id detected in purchase orders.")
+        raise ValueError(
+            "Duplicate po_id detected in purchase orders."
+        )
 
     if (lines["ordered_qty"] <= 0).any():
         raise ValueError("Invalid ordered quantity.")
@@ -102,6 +125,7 @@ def read_source_data():
     if (lines["line_total"] < 0).any():
         raise ValueError("Negative line total detected.")
 
+    print(f"Batch ID: {batch_id}")
     print(f"Purchase order lines: {len(lines):,}")
     print(f"Purchase orders: {len(orders):,}")
     print("Source validation: PASSED")
@@ -281,7 +305,8 @@ def load_fact_purchase_order_lines(engine):
             ON order_date.full_date = s.order_date::date
 
         INNER JOIN gold.dim_date expected_date
-            ON expected_date.full_date = s.expected_delivery_date::date
+            ON expected_date.full_date =
+               s.expected_delivery_date::date
 
         INNER JOIN gold.dim_product p
             ON p.product_id = s.product_id
@@ -320,26 +345,80 @@ def load_fact_purchase_order_lines(engine):
 
 
 # =========================================================
-# 6. RECONCILIATION
+# 6. SILVER-TO-GOLD RECONCILIATION
 # =========================================================
 
-def reconcile_purchase_lines(engine, source_count):
+def reconcile_purchase_lines(engine):
 
     reconciliation_sql = text("""
+        WITH comparison AS (
+
+            SELECT
+                s.po_line_id,
+
+                f.po_line_id AS fact_po_line_id,
+
+                (
+                    f.po_id IS DISTINCT FROM s.po_id
+
+                    OR f.ordered_qty IS DISTINCT FROM s.ordered_qty
+
+                    OR f.unit_cost IS DISTINCT FROM s.unit_cost
+
+                    OR f.line_total IS DISTINCT FROM s.line_total
+
+                    OR f.order_status IS DISTINCT FROM s.status
+
+                    OR f.is_high_value_line
+                       IS DISTINCT FROM s.is_high_value_line
+
+                    OR order_date.full_date
+                       IS DISTINCT FROM s.order_date::date
+
+                    OR expected_date.full_date
+                       IS DISTINCT FROM
+                          s.expected_delivery_date::date
+
+                    OR p.product_id IS DISTINCT FROM s.product_id
+
+                    OR sp.supplier_id IS DISTINCT FROM s.supplier_id
+
+                ) AS has_mismatch
+
+            FROM staging.stg_purchase_order_lines s
+
+            LEFT JOIN gold.fact_purchase_order_lines f
+                ON f.po_line_id = s.po_line_id
+
+            LEFT JOIN gold.dim_date order_date
+                ON order_date.date_key = f.order_date_key
+
+            LEFT JOIN gold.dim_date expected_date
+                ON expected_date.date_key =
+                   f.expected_delivery_date_key
+
+            LEFT JOIN gold.dim_product p
+                ON p.product_key = f.product_key
+
+            LEFT JOIN gold.dim_supplier sp
+                ON sp.supplier_key = f.supplier_key
+        )
+
         SELECT
-            COUNT(*) AS fact_rows,
+            COUNT(*) AS source_rows,
 
-            COUNT(DISTINCT po_line_id) AS unique_lines,
+            COUNT(fact_po_line_id) AS matched_fact_rows,
 
-            COUNT(DISTINCT po_id) AS unique_purchase_orders,
+            COUNT(*) FILTER (
+                WHERE fact_po_line_id IS NULL
+            ) AS missing_fact_rows,
 
-            SUM(ordered_qty) AS total_ordered_quantity,
+            COUNT(*) FILTER (
+                WHERE fact_po_line_id IS NOT NULL
+                  AND has_mismatch
+            ) AS mismatched_fact_rows
 
-            SUM(line_total) AS total_purchase_order_value,
-
-            SUM(ordered_qty * unit_cost) AS calculated_line_value
-
-        FROM gold.fact_purchase_order_lines;
+        FROM comparison;
     """)
 
     with engine.connect() as connection:
@@ -350,16 +429,22 @@ def reconcile_purchase_lines(engine, source_count):
     print("\nSilver-to-Gold reconciliation:")
 
     for key, value in result.items():
-        print(f"{key}: {value}")
+        print(f"{key}: {value:,}")
 
-    if result["fact_rows"] != source_count:
-        raise ValueError("Fact row count does not match source.")
+    if result["source_rows"] != result["matched_fact_rows"]:
+        raise ValueError(
+            "Silver-to-Gold row count reconciliation failed."
+        )
 
-    if result["unique_lines"] != source_count:
-        raise ValueError("Duplicate or missing purchase order lines.")
+    if result["missing_fact_rows"] > 0:
+        raise ValueError(
+            "Some purchase order lines are missing from Gold."
+        )
 
-    if result["total_purchase_order_value"] != result["calculated_line_value"]:
-        raise ValueError("Purchase line financial reconciliation failed.")
+    if result["mismatched_fact_rows"] > 0:
+        raise ValueError(
+            "Purchase order line values differ between Silver and Gold."
+        )
 
     print("Silver-to-Gold reconciliation: PASSED")
 
@@ -368,17 +453,18 @@ def reconcile_purchase_lines(engine, source_count):
 # 7. MAIN
 # =========================================================
 
-def main():
+def main(batch_id: str):
 
     print("=" * 60)
     print("OPSPULSE - FACT PURCHASE ORDER LINES LOADER")
     print("=" * 60)
 
+    print(f"Processing batch: {batch_id}")
+
     engine = get_database_engine()
 
     try:
-
-        lines, orders = read_source_data()
+        lines, orders = read_source_data(batch_id)
 
         integrated = integrate_purchase_data(lines, orders)
 
@@ -388,7 +474,7 @@ def main():
 
         load_fact_purchase_order_lines(engine)
 
-        reconcile_purchase_lines(engine, len(lines))
+        reconcile_purchase_lines(engine)
 
         print("\n" + "=" * 60)
         print("FACT PURCHASE ORDER LINES LOAD COMPLETED SUCCESSFULLY.")
@@ -398,5 +484,21 @@ def main():
         engine.dispose()
 
 
+# =========================================================
+# 8. COMMAND LINE EXECUTION
+# =========================================================
+
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Load purchase order lines into OpsPulse Gold."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        help="Silver batch ID to load.",
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)

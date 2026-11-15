@@ -1,6 +1,6 @@
 
 from pathlib import Path
-from decimal import Decimal, InvalidOperation
+import argparse
 
 import pandas as pd
 from sqlalchemy import text
@@ -14,19 +14,8 @@ from warehouse.db_connection import get_database_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
-BATCH_ID = "batch_20261111_124227_c8e6ab39"
-
-SOURCE_FILE = (
-    PROJECT_ROOT
-    / "data"
-    / "silver"
-    / BATCH_ID
-    / "inventory.csv"
-)
-
 STAGING_TABLE = "stg_inventory_snapshot"
-CHUNK_SIZE = 1000
-
+CHUNK_SIZE = 100
 
 REQUIRED_COLUMNS = [
     "inventory_snapshot_id",
@@ -53,15 +42,23 @@ REQUIRED_COLUMNS = [
 # 1. READ SOURCE DATA
 # =========================================================
 
-def read_inventory_data() -> pd.DataFrame:
+def read_inventory_data(batch_id: str) -> pd.DataFrame:
 
-    if not SOURCE_FILE.exists():
+    source_file = (
+        PROJECT_ROOT
+        / "data"
+        / "silver"
+        / batch_id
+        / "inventory.csv"
+    )
+
+    if not source_file.exists():
         raise FileNotFoundError(
-            f"Inventory source file not found: {SOURCE_FILE}"
+            f"Inventory source file not found: {source_file}"
         )
 
     df = pd.read_csv(
-        SOURCE_FILE,
+        source_file,
         parse_dates=["snapshot_date"],
     )
 
@@ -89,38 +86,48 @@ def read_inventory_data() -> pd.DataFrame:
             "Duplicate inventory_snapshot_id values found."
         )
 
-    if (
-        df.duplicated(
-            subset=[
-                "product_id",
-                "warehouse_id",
-                "snapshot_date",
-            ]
-        ).any()
-    ):
+    if df.duplicated(
+        subset=[
+            "product_id",
+            "warehouse_id",
+            "snapshot_date",
+        ]
+    ).any():
         raise ValueError(
             "Duplicate inventory grain detected in Silver."
         )
 
     if (df["quantity_on_hand"] < 0).any():
-        raise ValueError("Negative quantity_on_hand detected.")
+        raise ValueError(
+            "Negative quantity_on_hand detected."
+        )
 
     if (df["quantity_reserved"] < 0).any():
-        raise ValueError("Negative quantity_reserved detected.")
+        raise ValueError(
+            "Negative quantity_reserved detected."
+        )
 
-    if (df["quantity_reserved"] > df["quantity_on_hand"]).any():
+    if (
+        df["quantity_reserved"] > df["quantity_on_hand"]
+    ).any():
         raise ValueError(
             "Reserved quantity exceeds on-hand quantity."
         )
 
     if (df["available_quantity"] < 0).any():
-        raise ValueError("Negative available quantity detected.")
+        raise ValueError(
+            "Negative available quantity detected."
+        )
 
     if (df["standard_cost"] < 0).any():
-        raise ValueError("Negative standard cost detected.")
+        raise ValueError(
+            "Negative standard cost detected."
+        )
 
     if (df["capacity_units"] <= 0).any():
-        raise ValueError("Invalid warehouse capacity detected.")
+        raise ValueError(
+            "Invalid warehouse capacity detected."
+        )
 
     print(f"Silver records read: {len(df):,}")
     print("Source validation: PASSED")
@@ -132,7 +139,10 @@ def read_inventory_data() -> pd.DataFrame:
 # 2. LOAD STAGING
 # =========================================================
 
-def load_to_staging(engine, df: pd.DataFrame) -> None:
+def load_to_staging(
+    engine,
+    df: pd.DataFrame,
+) -> None:
 
     print("\nLoading data into Staging...")
 
@@ -193,6 +203,7 @@ def validate_dimension_matches(engine) -> None:
     """)
 
     with engine.connect() as connection:
+
         result = connection.execute(
             validation_sql
         ).mappings().one()
@@ -317,7 +328,7 @@ def load_fact_inventory(engine) -> None:
 
     print("\nFact Inventory Snapshot load:")
     print(f"Records inserted: {inserted:,}")
-    print(f"Total records: {after_count:,}")
+    print(f"Total records in Gold: {after_count:,}")
 
 
 # =========================================================
@@ -326,39 +337,95 @@ def load_fact_inventory(engine) -> None:
 
 def reconcile_inventory(
     engine,
-    source_count: int
+    source_count: int,
 ) -> None:
 
     reconciliation_sql = text("""
         SELECT
-            COUNT(*) AS fact_rows,
 
-            COUNT(DISTINCT inventory_snapshot_id)
-                AS unique_snapshot_ids,
+            COUNT(*) AS source_rows,
+
+            COUNT(DISTINCT s.inventory_snapshot_id)
+                AS unique_source_ids,
+
+            COUNT(DISTINCT f.inventory_snapshot_id)
+                AS unique_fact_ids,
 
             COUNT(DISTINCT (
-                date_key,
-                product_key,
-                warehouse_key
-            )) AS unique_grains,
-
-            SUM(quantity_on_hand) AS total_quantity_on_hand,
-
-            SUM(quantity_reserved) AS total_quantity_reserved,
-
-            SUM(available_quantity) AS total_available_quantity,
-
-            SUM(total_inventory_value) AS total_inventory_value,
-
-            SUM(available_inventory_value) AS available_inventory_value,
-
-            SUM(reserved_inventory_value) AS reserved_inventory_value,
+                f.date_key,
+                f.product_key,
+                f.warehouse_key
+            )) AS unique_fact_grains,
 
             COUNT(*) FILTER (
-                WHERE is_stockout = TRUE
-            ) AS stockout_records
+                WHERE
+                    f.inventory_snapshot_id IS NULL
 
-        FROM gold.fact_inventory_snapshot;
+                    OR f.date_key IS DISTINCT FROM d.date_key
+
+                    OR f.product_key IS DISTINCT FROM p.product_key
+
+                    OR f.warehouse_key IS DISTINCT FROM w.warehouse_key
+
+                    OR f.quantity_on_hand IS DISTINCT FROM s.quantity_on_hand
+
+                    OR f.quantity_reserved IS DISTINCT FROM s.quantity_reserved
+
+                    OR f.available_quantity IS DISTINCT FROM s.available_quantity
+
+                    OR ABS(
+                        f.standard_cost - s.standard_cost
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.total_inventory_value - s.total_inventory_value
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.available_inventory_value - s.available_inventory_value
+                    ) > 0.000001
+
+                    OR ABS(
+                        f.reserved_inventory_value - s.reserved_inventory_value
+                    ) > 0.000001
+
+                    OR f.capacity_units IS DISTINCT FROM s.capacity_units
+
+                    OR f.warehouse_total_on_hand
+                        IS DISTINCT FROM s.warehouse_total_on_hand
+
+                    OR ABS(
+                        f.capacity_utilization_pct
+                        - s.capacity_utilization_pct
+                    ) > 0.00005
+
+                    OR f.is_stockout IS DISTINCT FROM s.is_stockout
+
+                    OR f.is_fully_reserved
+                        IS DISTINCT FROM s.is_fully_reserved
+
+                    OR f.is_reserved_exceeds_on_hand
+                        IS DISTINCT FROM s.is_reserved_exceeds_on_hand
+
+            ) AS mismatched_rows
+
+        FROM staging.stg_inventory_snapshot s
+
+        LEFT JOIN gold.fact_inventory_snapshot f
+            ON f.inventory_snapshot_id = s.inventory_snapshot_id
+
+        LEFT JOIN gold.dim_date d
+            ON d.full_date = s.snapshot_date::date
+
+        LEFT JOIN gold.dim_product p
+            ON p.product_id = s.product_id
+           AND p.valid_from <= s.snapshot_date::date
+           AND s.snapshot_date::date < p.valid_to
+
+        LEFT JOIN gold.dim_warehouse w
+            ON w.warehouse_id = s.warehouse_id
+           AND w.valid_from <= s.snapshot_date::date
+           AND s.snapshot_date::date < w.valid_to;
     """)
 
     with engine.connect() as connection:
@@ -370,21 +437,31 @@ def reconcile_inventory(
     print("\nSilver-to-Gold reconciliation:")
 
     for key, value in result.items():
-        print(f"{key}: {value}")
+        print(f"{key}: {value:,}")
 
-    if result["fact_rows"] != source_count:
+    if result["source_rows"] != source_count:
         raise ValueError(
-            "Reconciliation failed: row count mismatch."
+            "Reconciliation failed: source row count mismatch."
         )
 
-    if result["unique_snapshot_ids"] != source_count:
+    if result["unique_source_ids"] != source_count:
         raise ValueError(
-            "Reconciliation failed: duplicate snapshot IDs."
+            "Reconciliation failed: duplicate source snapshot IDs."
         )
 
-    if result["unique_grains"] != source_count:
+    if result["unique_fact_ids"] != source_count:
         raise ValueError(
-            "Reconciliation failed: duplicate inventory grain."
+            "Reconciliation failed: missing fact snapshot IDs."
+        )
+
+    if result["unique_fact_grains"] != source_count:
+        raise ValueError(
+            "Reconciliation failed: duplicate fact inventory grain."
+        )
+
+    if result["mismatched_rows"] != 0:
+        raise ValueError(
+            "Reconciliation failed: source and fact values do not match."
         )
 
     print("Silver-to-Gold reconciliation: PASSED")
@@ -394,17 +471,21 @@ def reconcile_inventory(
 # 6. MAIN
 # =========================================================
 
-def main() -> None:
+def main(batch_id: str) -> None:
+
+    if not batch_id or not batch_id.strip():
+        raise ValueError("A valid batch_id is required.")
 
     print("=" * 55)
     print("OPSPULSE - FACT INVENTORY SNAPSHOT LOADER")
+    print(f"Batch ID: {batch_id}")
     print("=" * 55)
 
     engine = get_database_engine()
 
     try:
 
-        df = read_inventory_data()
+        df = read_inventory_data(batch_id)
 
         load_to_staging(engine, df)
 
@@ -412,7 +493,10 @@ def main() -> None:
 
         load_fact_inventory(engine)
 
-        reconcile_inventory(engine, len(df))
+        reconcile_inventory(
+            engine,
+            len(df),
+        )
 
         print("\n" + "=" * 55)
         print(
@@ -425,5 +509,22 @@ def main() -> None:
         engine.dispose()
 
 
+# =========================================================
+# 7. COMMAND LINE EXECUTION
+# =========================================================
+
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(
+        description="Load Inventory Snapshot data into Gold."
+    )
+
+    parser.add_argument(
+        "batch_id",
+        type=str,
+        help="Silver batch ID to process.",
+    )
+
+    args = parser.parse_args()
+
+    main(args.batch_id)
