@@ -170,8 +170,9 @@ The volume extractor retrieves authoritative counts across pipeline stages:
 - **Bronze Records Stored**: `37,721`
 - **Silver Valid Records**: `37,721`
 - **Quarantined Records**: `0`
-- **Gold Warehouse Records**: `37,464`
-- **Data Quality Checks**: `210` executed, `0` failed (100% pass rate)
+- **Gold Warehouse Records**: `37,464` (across 8 dimensions, 2 bridges, and 5 fact tables)
+- **Cumulative Medallion Observations**: `150,627` ($37,721 + 37,721 + 37,721 + 37,464$)
+- **Data Quality Assertions**: `210` executed, `0` failed (100% pass rate; stored under `layer='DataQuality'` and excluded from Medallion record totals)
 
 ---
 
@@ -257,7 +258,7 @@ The test suite covers models, classification rules, volume extraction, database 
 - **Pass Rate**: `100%`
 
 ```powershell
-$env:OPSPULSE_DATABASE_URL="postgresql+psycopg://retailflow_admin:111111@127.0.0.1:5432/opspulse_dw"
+$env:OPSPULSE_DATABASE_URL="postgresql+psycopg://<username>:<password>@127.0.0.1:5432/opspulse_dw"
 $env:PYTHONPATH="backend/src"
 .\.venv\Scripts\pytest.exe -v
 ```

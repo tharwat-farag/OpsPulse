@@ -224,6 +224,56 @@ class TestMonitoringEndpoint:
         assert "Silver" in layers
         assert "Gold" in layers
 
+    def test_medallion_volume_kpi_excludes_data_quality_and_quarantine(self):
+        response = client.get("/api/monitoring")
+        assert response.status_code == 200
+        data = response.json()
+
+        volume_kpi = next((k for k in data["kpis"] if "Medallion" in k["title"]), None)
+        assert volume_kpi is not None
+        # Verified baseline: Raw (37,721) + Bronze (37,721) + Silver (37,721) + Gold (37,464) = 150,627
+        # Must exclude 210 DataQuality assertion checks and 0 Quarantine records
+        assert volume_kpi["numericValue"] == 150627
+        assert "150,627" in volume_kpi["value"]
+
+    def test_volume_lineage_aligns_with_kpi_batch(self):
+        response = client.get("/api/monitoring")
+        assert response.status_code == 200
+        data = response.json()
+
+        lineage = data["volumeLineage"]
+        layer_dict = {item["layer"]: item["recordCount"] for item in lineage}
+
+        # DataQuality layer must NOT be in volumeLineage
+        assert "DataQuality" not in layer_dict
+
+        # Verify exact baseline layer counts
+        assert layer_dict.get("Raw") == 37721
+        assert layer_dict.get("Bronze") == 37721
+        assert layer_dict.get("Silver") == 37721
+        assert layer_dict.get("Gold") == 37464
+        assert layer_dict.get("Quarantine") == 0
+
+        # Sum of Medallion layers strictly equals 150,627
+        medallion_sum = (
+            layer_dict.get("Raw", 0)
+            + layer_dict.get("Bronze", 0)
+            + layer_dict.get("Silver", 0)
+            + layer_dict.get("Gold", 0)
+        )
+        assert medallion_sum == 150627
+
+    def test_monitoring_fallback_structure(self):
+        # Verify the structure matches expected Medallion fallback defaults
+        response = client.get("/api/monitoring")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["volumeLineage"]) == 5
+        layers = [item["layer"] for item in data["volumeLineage"]]
+        assert layers == ["Raw", "Bronze", "Silver", "Quarantine", "Gold"]
+
+
+
 
 class TestDataQualityEndpoint:
     def test_get_data_quality(self):

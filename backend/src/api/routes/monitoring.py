@@ -35,11 +35,39 @@ def get_monitoring(conn: Connection = Depends(get_db_connection)) -> Dict[str, A
     failed_tasks = int(run_row["failed_tasks"]) if run_row else 0
     duration_sec = float(run_row["total_duration_seconds"]) if run_row and run_row["total_duration_seconds"] else 28.32
     run_status = run_row["run_status"] if run_row else "success"
+    batch_id = run_row["batch_id"] if run_row and run_row["batch_id"] else None
 
-    # Volume total count
-    vol_sum = conn.execute(
-        text("SELECT COALESCE(SUM(record_count), 150627) FROM monitoring.pipeline_data_volume_metrics")
-    ).scalar() or 150627
+    # Discover latest batch_id from volume metrics if not present on run row
+    if not batch_id:
+        batch_id_row = conn.execute(
+            text("""
+                SELECT batch_id 
+                FROM monitoring.pipeline_data_volume_metrics 
+                WHERE batch_id IS NOT NULL 
+                ORDER BY collected_at DESC NULLS LAST 
+                LIMIT 1
+            """)
+        ).mappings().fetchone()
+        if batch_id_row:
+            batch_id = batch_id_row["batch_id"]
+
+    # Calculate Medallion total for the latest batch only.
+    # Includes ONLY Raw, Bronze, Silver, Gold.
+    # Excludes DataQuality assertion counts and Quarantine.
+    vol_sum = None
+    if batch_id:
+        vol_sum = conn.execute(
+            text("""
+                SELECT COALESCE(SUM(record_count), 150627)
+                FROM monitoring.pipeline_data_volume_metrics
+                WHERE batch_id = :batch_id
+                  AND layer IN ('Raw', 'Bronze', 'Silver', 'Gold')
+            """),
+            {"batch_id": batch_id}
+        ).scalar()
+
+    if vol_sum is None:
+        vol_sum = 150627
 
     kpis = [
         {
@@ -104,23 +132,27 @@ def get_monitoring(conn: Connection = Depends(get_db_connection)) -> Dict[str, A
         },
     ]
 
-    # 2. Volume Lineage Data
-    vol_rows = conn.execute(
-        text("""
-            SELECT layer, record_count AS "recordCount", metric_source AS source
-            FROM monitoring.pipeline_data_volume_metrics
-            WHERE layer IN ('Raw', 'Bronze', 'Silver', 'Quarantine', 'Gold')
-            ORDER BY 
-                CASE layer
-                    WHEN 'Raw' THEN 1
-                    WHEN 'Bronze' THEN 2
-                    WHEN 'Silver' THEN 3
-                    WHEN 'Quarantine' THEN 4
-                    WHEN 'Gold' THEN 5
-                    ELSE 6
-                END
-        """)
-    ).mappings().fetchall()
+    # 2. Volume Lineage Data (filtered by the exact same batch_id as the KPI)
+    vol_rows = []
+    if batch_id:
+        vol_rows = conn.execute(
+            text("""
+                SELECT layer, record_count AS "recordCount", metric_source AS source
+                FROM monitoring.pipeline_data_volume_metrics
+                WHERE batch_id = :batch_id
+                  AND layer IN ('Raw', 'Bronze', 'Silver', 'Quarantine', 'Gold')
+                ORDER BY 
+                    CASE layer
+                        WHEN 'Raw' THEN 1
+                        WHEN 'Bronze' THEN 2
+                        WHEN 'Silver' THEN 3
+                        WHEN 'Quarantine' THEN 4
+                        WHEN 'Gold' THEN 5
+                        ELSE 6
+                    END
+            """),
+            {"batch_id": batch_id}
+        ).mappings().fetchall()
 
     volume_lineage = [
         {

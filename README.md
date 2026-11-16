@@ -94,7 +94,7 @@ Wholesale and retail distribution networks frequently encounter severe operation
 ## 4. Key Engineering Highlights
 
 - **Robust Medallion Architecture:** Explicit separation of concerns across Bronze (raw staging), Silver (standardized, cleaned, quarantined), and Gold (star-schema dimensional warehouse).
-- **Kimball Dimensional Modeling:** 6 core dimensions, 2 bridge tables, and 5 granular fact tables managing 150,000+ transactional events.
+- **Kimball Dimensional Modeling:** 8 dimensions, 2 bridge tables, and 5 granular fact tables modeling 37,000+ business records across a conformed star schema (150,627 cumulative Medallion layer observations).
 - **Automated Data Quality Gate (210 Checks):** Automated validation suite executing across Completeness, Uniqueness, Validity, Referential Integrity, and Business Logic with automated quarantine routing.
 - **Full Pipeline Observability:** End-to-end Medallion volume lineage tracking, task execution duration telemetry, and root-cause failure classification persisted in dedicated PostgreSQL `monitoring` schemas.
 - **Production Airflow 3.4.0 DAG:** 30-task directed acyclic graph automating ingestion, transformation, quality gates, warehouse loading, and observability telemetry in 28.32 seconds.
@@ -304,7 +304,7 @@ The end-to-end data pipeline is automated through the `opspulse_pipeline` DAG in
 
 ### Pipeline Performance & Characteristics
 - **Total Tasks:** 30 orchestrated tasks organized into modular TaskGroups.
-- **Execution Speed:** Full pipeline completes in **28.32 seconds** across all 150,000+ records.
+- **Execution Speed:** Full pipeline completes in **28.32 seconds** across all 150,627 cumulative Medallion record observations.
 - **Idempotency:** All loading operations utilize `ON CONFLICT` semantics or partitioned date boundaries to guarantee safe pipeline reruns without record duplication.
 - **Automated Failure Classification:** Any task failure triggers an exception interceptor that classifies the failure (e.g., `SchemaMismatch`, `DataQualityViolation`, `NetworkTimeout`) and logs it into `monitoring.pipeline_task_metrics`.
 
@@ -344,11 +344,12 @@ Data operations are observable in real time through dedicated PostgreSQL schemas
 ### Telemetry Schemas in `opspulse_dw`
 - **`monitoring.pipeline_run_metrics`:** Records pipeline batch ID, run trigger type (Scheduled vs Manual), overall execution duration, start/end timestamps, and success flags.
 - **`monitoring.pipeline_task_metrics`:** Records individual task durations (seconds), task states, retry counts, and sanitized error traces.
-- **`monitoring.pipeline_data_volume_metrics`:** Records Medallion layer record progression at each step:
-  $$\text{Raw Records: } 150,627 \longrightarrow \text{Bronze: } 150,627 \longrightarrow \text{Silver: } 150,627 \longrightarrow \text{Gold: } 150,627$$
+- **`monitoring.pipeline_data_volume_metrics`:** Records Medallion layer record progression at each pipeline hop for batch isolation:
+  $$\text{Raw: } 37,721 \longrightarrow \text{Bronze: } 37,721 \longrightarrow \text{Silver: } 37,721 \longrightarrow \text{Gold: } 37,464 \quad (\Sigma = 150,627 \text{ cumulative layer observations})$$
 
 ### Real-Time Observability Features
-- **Zero Record Drop Lineage:** Proves 100% data consistency across all transformation hops.
+- **Layer-Level Volume Lineage:** Accurately accounts for data volume at each stage of the Medallion pipeline. In the verified pipeline run (`batch_20261115_051056_1d64c5da`), exactly 37,721 raw transactional records were ingested into Bronze and validated into Silver with zero quarantined records (`Quarantine = 0`). Gold loading modeled these events into 15 dimensional, bridge, and fact tables yielding 37,464 records due to dimensional deduplication and star-schema conformances (a combined total of 150,627 Medallion pipeline observations).
+- **Isolated Quality Governance Metrics:** Data Quality assertion executions (210 checks executed, 100% pass rate) are persisted under `layer = 'DataQuality'` and tracked independently from physical entity volumes.
 - **SLA Tracking:** Tracks execution against 60-second execution SLAs (average: 28.32 seconds).
 - **Automated Root-Cause Classification:** Categorizes failures for automated alert routing without manual log trawling.
 
