@@ -113,27 +113,45 @@ def get_suppliers(conn: Connection = Depends(get_db_connection)) -> Dict[str, An
     ]
 
     # 2. Suppliers Directory
+    # NOTE: fact_purchase_order_lines and fact_goods_receipts are pre-aggregated in
+    # separate subqueries before joining to dim_supplier.  Joining both fact tables
+    # directly to the dimension without connecting them to each other creates a
+    # Cartesian product (PO lines × receipts per supplier), inflating spend by ~200x.
     supplier_rows = conn.execute(
         text("""
-            SELECT 
-                s.supplier_id AS "supplierId",
-                s.supplier_name AS "supplierName",
-                'Retail Distribution Goods & Logistics' AS category,
-                ROUND(s.rating::numeric, 2) AS "qualityRating",
-                s.is_active AS "isActive",
-                COALESCE(ROUND(SUM(l.line_total)::numeric, 0), 0) AS "totalSpendYtd",
-                COUNT(DISTINCT l.po_id) AS "activeContracts",
-                ROUND(COALESCE(AVG(gr.acceptance_rate) * 100, 95.7)::numeric, 1) AS "fulfillmentRatePct",
-                ROUND(COALESCE((COUNT(CASE WHEN NOT gr.is_late_receipt THEN 1 END)::float / NULLIF(COUNT(gr.receipt_fact_key), 0) * 100), 32.9)::numeric, 1) AS "onTimeDeliveryPct",
-                CASE 
+            SELECT
+                s.supplier_id                                            AS "supplierId",
+                s.supplier_name                                          AS "supplierName",
+                'Retail Distribution Goods & Logistics'                  AS category,
+                ROUND(s.rating::numeric, 2)                              AS "qualityRating",
+                s.is_active                                              AS "isActive",
+                COALESCE(ROUND(po.total_spend::numeric, 0), 0)           AS "totalSpendYtd",
+                COALESCE(po.distinct_po_count, 0)                        AS "activeContracts",
+                ROUND(COALESCE(gr.avg_acceptance * 100, 95.7)::numeric, 1) AS "fulfillmentRatePct",
+                ROUND(COALESCE(gr.otd_pct, 32.9)::numeric, 1)           AS "onTimeDeliveryPct",
+                CASE
                     WHEN s.rating >= 4.0 THEN 'low'
                     WHEN s.rating >= 3.5 THEN 'medium'
                     ELSE 'high'
-                END AS "riskLevel"
+                END                                                      AS "riskLevel"
             FROM gold.dim_supplier s
-            LEFT JOIN gold.fact_purchase_order_lines l ON s.supplier_key = l.supplier_key
-            LEFT JOIN gold.fact_goods_receipts gr ON s.supplier_key = gr.supplier_key
-            GROUP BY s.supplier_id, s.supplier_name, s.rating, s.is_active
+            LEFT JOIN (
+                SELECT
+                    supplier_key,
+                    SUM(line_total)        AS total_spend,
+                    COUNT(DISTINCT po_id)  AS distinct_po_count
+                FROM gold.fact_purchase_order_lines
+                GROUP BY supplier_key
+            ) po ON s.supplier_key = po.supplier_key
+            LEFT JOIN (
+                SELECT
+                    supplier_key,
+                    AVG(acceptance_rate)                                                            AS avg_acceptance,
+                    COUNT(CASE WHEN NOT is_late_receipt THEN 1 END)::float
+                        / NULLIF(COUNT(*), 0) * 100                                                 AS otd_pct
+                FROM gold.fact_goods_receipts
+                GROUP BY supplier_key
+            ) gr ON s.supplier_key = gr.supplier_key
             ORDER BY "totalSpendYtd" DESC
         """)
     ).mappings().fetchall()

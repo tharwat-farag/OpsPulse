@@ -95,7 +95,11 @@ export default function SettingsPage() {
           <div className="rounded-lg bg-slate-50 p-3">
             <span className="text-[10px] uppercase font-semibold text-slate-400 block">FastAPI Analytics Service</span>
             <span className="font-bold text-slate-900 mt-0.5 block">
-              {process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api"}
+              {process.env.NEXT_PUBLIC_API_URL
+                ? process.env.NEXT_PUBLIC_API_URL
+                : typeof window !== "undefined" && window.location.hostname !== "localhost"
+                ? `${window.location.origin}/api`
+                : "http://127.0.0.1:8000/api"}
             </span>
             <span className={`text-[11px] font-semibold ${apiStatus === "Connected" ? "text-emerald-600" : "text-rose-600"}`}>
               Status: {apiStatus}
